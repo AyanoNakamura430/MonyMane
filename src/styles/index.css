@@ -1,0 +1,24 @@
+@import './fonts.css';
+@import './tailwind.css';
+@import './theme.css';
+
+html {
+  color-scheme: light;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  min-width: 320px;
+  font-family: 'Noto Sans JP', 'Inter', sans-serif;
+  font-weight: 300;
+  -webkit-font-smoothing: antialiased;
+}
+
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  touch-action: manipulation;
+}
