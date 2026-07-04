@@ -722,7 +722,15 @@ function ProgressBar({
   const overBudget = usageRate > 100;
 
   return (
-    <div className={`${heightClass} overflow-hidden rounded-full bg-[#f2f2f2]`}>
+    <div
+      className={`${heightClass} overflow-hidden rounded-full bg-[#f2f2f2]`}
+      role="progressbar"
+      aria-label="使用率"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={progressWidth}
+      aria-valuetext={`${usageRate}%${overBudget ? '、予算オーバー' : ''}`}
+    >
       <div
         className={`h-full rounded-full transition-[width] ${
           overBudget ? 'bg-[#b42318]' : 'bg-[#2c2c2c]'
@@ -1234,7 +1242,12 @@ function ItemForm({
       );
     } else if (section === 'category') {
       data.setCategories((current) =>
-        upsert(current, { ...base, name: name.trim(), color: undefined, icon: undefined }),
+        upsert(current, {
+          ...base,
+          name: name.trim(),
+          color: editingItem && 'color' in editingItem ? editingItem.color : undefined,
+          icon: editingItem && 'icon' in editingItem ? editingItem.icon : undefined,
+        }),
       );
     } else if (section === 'variable') {
       data.setVariableCategoryBudgets((current) =>

@@ -56,8 +56,16 @@ function migrateLegacyCategories(): {
   const variableCategoryBudgets: VariableCategoryBudget[] = [];
 
   legacyItems.forEach((item, index) => {
+    if (
+      !item
+      || typeof item.id !== 'string'
+      || typeof item.name !== 'string'
+      || typeof item.budgetAmount !== 'number'
+    ) {
+      return;
+    }
     const name = item.name.trim();
-    if (!name) return;
+    if (!name || !Number.isFinite(item.budgetAmount)) return;
     const duplicateCount = categories.filter((category) =>
       category.name === name || category.name.startsWith(`${name} (`),
     ).length;
@@ -66,11 +74,11 @@ function migrateLegacyCategories(): {
     const category: Category = {
       id: item.id,
       name: categoryName,
-      color: item.color,
-      icon: item.icon,
-      memo: item.memo,
-      createdAt: item.createdAt,
-      updatedAt: item.updatedAt,
+      color: typeof item.color === 'string' ? item.color : undefined,
+      icon: typeof item.icon === 'string' ? item.icon : undefined,
+      memo: typeof item.memo === 'string' ? item.memo : undefined,
+      createdAt: typeof item.createdAt === 'string' ? item.createdAt : new Date(0).toISOString(),
+      updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : new Date(0).toISOString(),
     };
     categories.push(category);
 
@@ -78,9 +86,9 @@ function migrateLegacyCategories(): {
       id: `${item.id}-budget-${index}`,
       categoryId: item.id,
       budgetAmount: item.budgetAmount,
-      memo: item.memo,
-      createdAt: item.createdAt,
-      updatedAt: item.updatedAt,
+      memo: typeof item.memo === 'string' ? item.memo : undefined,
+      createdAt: typeof item.createdAt === 'string' ? item.createdAt : new Date(0).toISOString(),
+      updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : new Date(0).toISOString(),
     });
   });
 
