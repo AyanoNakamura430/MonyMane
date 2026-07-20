@@ -92,7 +92,7 @@ npm run test:watch
 
 typecheckは`src/main.tsx`を起点に、現行アプリから参照されるコードだけを対象とします。`vite.config.ts`と未参照コードは対象外です。
 
-unit testはNode環境で実行し、月間予算の重複正規化、version 1からversion 2への移行、backup version 1・2の解析・復元、基本的な月次・年次集計を対象とします。unit testの実行にはNode.js 20以上が必要です。この条件はVitestの実行要件であり、MonyMane全体の正式対応Node.jsバージョンではありません。
+unit testはNode環境で実行し、月間予算の重複正規化、version 1からversion 2への移行、backup version 1・2の解析・復元、基本的な月次・年次集計、カテゴリ予算比較、グループ・カテゴリ別変動費集計を対象とします。unit testの実行にはNode.js 20以上が必要です。この条件はVitestの実行要件であり、MonyMane全体の正式対応Node.jsバージョンではありません。
 
 lint、format、component test、E2E test、coverageは現時点で未整備です。jsdomとReact Testing Libraryも未導入のため、UI・Hook統合テストは対象外です。
 
@@ -132,6 +132,8 @@ MonyMane/
 │  ├─ app/
 │  │  ├─ App.tsx               # 現行画面・CRUD・バックアップ
 │  │  ├─ types.ts              # データ型
+│  │  ├─ budgetDomain.ts       # 移行・正規化・集計の純粋関数
+│  │  ├─ budgetDomain.test.ts  # データ処理のunit test
 │  │  ├─ useBudgetData.ts      # localStorage・移行・集計
 │  │  └─ components/           # UI部品と未参照コードを含む
 │  ├─ imports/                 # 現行未参照のFigma由来コード
@@ -154,7 +156,7 @@ MonyMane/
 - データはブラウザのlocalStorageにのみ保存されます。
 - localStorage保存失敗時の明示的なユーザー通知はありません。
 - JSONインポートは完全なスキーマ検証ではありません。
-- lint、format、自動テスト、CIは未整備です。
+- lint、format、component test、E2E test、CIは未整備です。
 - `vite.config.ts`と未参照コードは現在のtypecheck対象外です。
 - `src/app/App.tsx`に複数の責務が集中しています。
 - 未参照コードの調査・整理は未着手です。

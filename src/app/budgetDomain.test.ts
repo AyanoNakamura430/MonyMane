@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type {
   AnnualCost,
   AnnualIncome,
+  Category,
+  CategoryGroup,
   FixedCost,
   Income,
   MonthlyBudget,
@@ -10,6 +12,8 @@ import type {
 } from './types';
 import {
   calculateBudgetTotals,
+  calculateCategoryComparisons,
+  calculateVariableCostBreakdown,
   normalizeMonthlyBudgets,
   planVersion2Migration,
 } from './budgetDomain';
@@ -174,5 +178,185 @@ describe('calculateBudgetTotals', () => {
   it('データが0件なら各基本集計は0になる', () => {
     const result = totals();
     expect([result.incomeTotal, result.fixedCostTotal, result.variableCostTotal, result.yearlyIncomeTotal, result.yearlyFixedCostTotal, result.yearlyVariableCostTotal]).toEqual([0, 0, 0, 0, 0, 0]);
+  });
+});
+
+describe('calculateVariableCostBreakdown', () => {
+  const groups: CategoryGroup[] = [
+    { id: 'food', name: 'Food', createdAt: epoch, updatedAt: epoch },
+    { id: 'life', name: 'Life', createdAt: epoch, updatedAt: epoch },
+  ];
+  const categories: Category[] = [
+    { id: 'groceries', groupId: 'food', name: 'Groceries', createdAt: epoch, updatedAt: epoch },
+    { id: 'dining', groupId: 'food', name: 'Dining', createdAt: epoch, updatedAt: epoch },
+    { id: 'daily', groupId: 'life', name: 'Daily', createdAt: epoch, updatedAt: epoch },
+  ];
+  const cost = (
+    id: string,
+    amount: number,
+    month: string,
+    categoryGroupId?: string,
+    categoryId?: string,
+  ): VariableCost => ({ id, name: id, amount, month, categoryGroupId, categoryId, createdAt: epoch, updatedAt: epoch });
+  const breakdown = (
+    variableCosts: VariableCost[],
+    overrides: Partial<Parameters<typeof calculateVariableCostBreakdown>[0]> = {},
+  ) => calculateVariableCostBreakdown({
+    mode: 'monthly', targetMonth: '2026-01', selectedGroupId: null,
+    variableCosts, categoryGroups: groups, categories, ...overrides,
+  });
+
+  it('月次モードでは対象月だけを集計する', () => {
+    const result = breakdown([cost('jan', 100, '2026-01-31', 'food'), cost('feb', 900, '2026-02-01', 'food')]);
+    expect(result.total).toBe(100);
+    expect(result.entries.map(({ sourceId, amount }) => ({ sourceId, amount }))).toEqual([{ sourceId: 'food', amount: 100 }]);
+  });
+
+  it('年次モードでは対象年だけを集計する', () => {
+    const result = breakdown(
+      [cost('jan', 100, '2026-01-01', 'food'), cost('dec', 200, '2026-12-31', 'food'), cost('next', 900, '2027-01-01', 'food')],
+      { mode: 'yearly' },
+    );
+    expect(result.total).toBe(300);
+  });
+
+  it('同一グループの複数カテゴリを合算する', () => {
+    const result = breakdown([cost('a', 100, '2026-01-01', undefined, 'groceries'), cost('b', 250, '2026-01-02', undefined, 'dining')]);
+    expect(result.entries[0]).toMatchObject({ sourceId: 'food', amount: 350, kind: 'group' });
+  });
+
+  it('非空categoryGroupIdをカテゴリの親グループより優先する', () => {
+    const result = breakdown([cost('a', 100, '2026-01-01', 'life', 'groceries')]);
+    expect(result.entries[0]).toMatchObject({ sourceId: 'life', amount: 100 });
+  });
+
+  it('categoryGroupId欠落時はcategoryIdから親を補完する', () => {
+    expect(breakdown([cost('a', 100, '2026-01-01', undefined, 'groceries')]).entries[0]?.sourceId).toBe('food');
+  });
+
+  it('categoryGroupIdが空文字でもcategoryIdから親を補完する', () => {
+    expect(breakdown([cost('a', 100, '2026-01-01', '', 'daily')]).entries[0]?.sourceId).toBe('life');
+  });
+
+  it('グループIDも有効カテゴリIDもない実績を未分類へ集計する', () => {
+    const result = breakdown([cost('empty', 100, '2026-01-01'), cost('deleted', 200, '2026-01-02', undefined, 'missing')]);
+    expect(result.entries[0]).toMatchObject({ sourceId: '', amount: 300, kind: 'uncategorized' });
+  });
+
+  it('存在しない非空categoryGroupIdを削除済みグループ相当として維持する', () => {
+    const result = breakdown([cost('a', 100, '2026-01-01', 'deleted-group')]);
+    expect(result.entries[0]).toMatchObject({ sourceId: 'deleted-group', kind: 'deleted-group' });
+  });
+
+  it('選択グループ内の複数カテゴリを別々に集計する', () => {
+    const result = breakdown(
+      [cost('a', 100, '2026-01-01', 'food', 'groceries'), cost('b', 200, '2026-01-02', 'food', 'dining')],
+      { selectedGroupId: 'food' },
+    );
+    expect(result.selectedGroupState).toBe('existing');
+    expect(result.entries.map(({ sourceId, amount, kind }) => ({ sourceId, amount, kind }))).toEqual([
+      { sourceId: 'dining', amount: 200, kind: 'category' },
+      { sourceId: 'groceries', amount: 100, kind: 'category' },
+    ]);
+  });
+
+  it('選択グループ外・空・欠落・存在しないカテゴリを選択グループ内の未分類へ集計する', () => {
+    const result = breakdown([
+      cost('outside', 100, '2026-01-01', 'food', 'daily'),
+      cost('empty', 200, '2026-01-02', 'food', ''),
+      cost('missing', 300, '2026-01-03', 'food'),
+      cost('deleted', 400, '2026-01-04', 'food', 'missing'),
+    ], { selectedGroupId: 'food' });
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]).toMatchObject({ sourceId: '', amount: 1000, kind: 'uncategorized' });
+  });
+
+  it('金額降順で、同額時は対象実績の初出順を維持する', () => {
+    const result = breakdown([
+      cost('life-first', 100, '2026-01-01', 'life'),
+      cost('food-second', 100, '2026-01-02', 'food'),
+      cost('deleted-largest', 300, '2026-01-03', 'deleted'),
+    ]);
+    expect(result.entries.map((entry) => entry.sourceId)).toEqual(['deleted', 'life', 'food']);
+    expect(result.entries.map((entry) => entry.order)).toEqual([2, 0, 1]);
+  });
+
+  it('割合を小数第1位相当に丸める', () => {
+    const result = breakdown([cost('a', 1, '2026-01-01', 'food'), cost('b', 2, '2026-01-02', 'life')]);
+    expect(result.entries.map((entry) => entry.rate)).toEqual([66.7, 33.3]);
+  });
+
+  it('入力配列と入力オブジェクトを変更しない', () => {
+    const variableCosts = [cost('a', 100, '2026-01-01', 'food', 'groceries')];
+    const inputs = { variableCosts, categoryGroups: groups, categories };
+    const snapshot = structuredClone(inputs);
+    breakdown(variableCosts);
+    expect(inputs).toEqual(snapshot);
+  });
+});
+
+describe('calculateCategoryComparisons', () => {
+  const categories: Category[] = [
+    { id: 'food', groupId: 'living', name: 'Food', createdAt: epoch, updatedAt: epoch },
+    { id: 'travel', groupId: 'leisure', name: 'Travel', createdAt: epoch, updatedAt: epoch },
+  ];
+  const cost = (id: string, amount: number, month: string, categoryId?: string, categoryGroupId?: string): VariableCost =>
+    ({ id, name: id, amount, month, categoryId, categoryGroupId, createdAt: epoch, updatedAt: epoch });
+  const budget = (id: string, categoryId: string, budgetAmount: number): VariableCategoryBudget =>
+    ({ id, categoryId, budgetAmount, createdAt: epoch, updatedAt: epoch });
+  const compare = (
+    variableCategoryBudgets: VariableCategoryBudget[],
+    variableCosts: VariableCost[],
+  ) => calculateCategoryComparisons({ targetMonth: '2026-01', categories, variableCategoryBudgets, variableCosts });
+
+  it('対象月の有効カテゴリ実績と予算を比較し対象月外を除外する', () => {
+    const result = compare([budget('b', 'food', 500)], [cost('jan', 200, '2026-01-31', 'food'), cost('feb', 900, '2026-02-01', 'food')]);
+    expect(result[0]).toMatchObject({ categoryId: 'food', name: 'Food', budgetAmount: 500, actualAmount: 200 });
+  });
+
+  it('残額と整数へ丸めた使用率を算出する', () => {
+    const result = compare([budget('b', 'food', 300)], [cost('a', 100, '2026-01-01', 'food')]);
+    expect(result[0]).toMatchObject({ remainingAmount: 200, usageRate: 33 });
+  });
+
+  it('予算0円時は使用率0にする', () => {
+    expect(compare([budget('b', 'food', 0)], [cost('a', 100, '2026-01-01', 'food')])[0]?.usageRate).toBe(0);
+  });
+
+  it('予算超過時は負の残額と100%超の使用率を返す', () => {
+    const result = compare([budget('b', 'food', 100)], [cost('a', 150, '2026-01-01', 'food')]);
+    expect(result[0]).toMatchObject({ remainingAmount: -50, usageRate: 150 });
+  });
+
+  it('空・欠落・存在しないカテゴリIDを未分類へ集約し、正数なら末尾へ未分類行を追加する', () => {
+    const result = compare([], [
+      cost('empty', 100, '2026-01-01', ''),
+      cost('missing', 200, '2026-01-02'),
+      cost('deleted', 300, '2026-01-03', 'deleted'),
+    ]);
+    expect(result).toEqual([{ id: '', categoryId: '', name: '未分類', budgetAmount: 0, actualAmount: 600, remainingAmount: -600, usageRate: 0 }]);
+  });
+
+  it('未分類実績合計が0以下なら未分類行を追加しない', () => {
+    expect(compare([], [cost('zero', 0, '2026-01-01'), cost('negative', -1, '2026-01-02')])).toEqual([]);
+  });
+
+  it('予算比較の入力順を維持する', () => {
+    const result = compare([budget('travel-budget', 'travel', 200), budget('food-budget', 'food', 100)], []);
+    expect(result.map((item) => item.id)).toEqual(['travel-budget', 'food-budget']);
+  });
+
+  it('categoryGroupIdに関係なく有効なcategoryIdへ実績を集計する', () => {
+    const result = compare([budget('b', 'food', 500)], [cost('a', 200, '2026-01-01', 'food', 'different-group')]);
+    expect(result[0]?.actualAmount).toBe(200);
+  });
+
+  it('入力配列と入力オブジェクトを変更しない', () => {
+    const variableCategoryBudgets = [budget('b', 'food', 500)];
+    const variableCosts = [cost('a', 200, '2026-01-01', 'food')];
+    const inputs = { categories, variableCategoryBudgets, variableCosts };
+    const snapshot = structuredClone(inputs);
+    compare(variableCategoryBudgets, variableCosts);
+    expect(inputs).toEqual(snapshot);
   });
 });

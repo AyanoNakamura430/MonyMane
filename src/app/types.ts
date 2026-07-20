@@ -95,6 +95,31 @@ export type SavingGoal = {
   updatedAt: string;
 };
 
+export type CategoryComparison = {
+  id: string;
+  categoryId: string;
+  name: string;
+  budgetAmount: number;
+  actualAmount: number;
+  remainingAmount: number;
+  usageRate: number;
+};
+
+export type BreakdownEntry = {
+  sourceId: string;
+  amount: number;
+  rate: number;
+  order: number;
+  kind: 'group' | 'category' | 'uncategorized' | 'deleted-group';
+};
+
+export type VariableCostBreakdown = {
+  total: number;
+  selectedGroupTotal: number;
+  selectedGroupState: 'none' | 'existing' | 'deleted';
+  entries: BreakdownEntry[];
+};
+
 export type BudgetSection =
   | 'income'
   | 'fixed'

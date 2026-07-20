@@ -14,6 +14,7 @@ import type {
 } from './types';
 import {
   calculateBudgetTotals,
+  calculateCategoryComparisons,
   normalizeMonthlyBudgets,
   planVersion2Migration,
 } from './budgetDomain';
@@ -295,53 +296,12 @@ export function useBudgetData() {
     variableCosts,
   ]);
 
-  const categoryComparisons = useMemo(() => {
-    const categoryIds = new Set(categories.map((category) => category.id));
-    const actualByCategory = new Map<string, number>();
-
-    variableCosts
-      .filter((item) => item.month.slice(0, 7) === targetMonth)
-      .forEach((item) => {
-        const categoryId = item.categoryId && categoryIds.has(item.categoryId) ? item.categoryId : '';
-        actualByCategory.set(
-          categoryId,
-          (actualByCategory.get(categoryId) ?? 0) + item.amount,
-        );
-      });
-
-    const comparisons = variableCategoryBudgets.map((budget) => {
-      const category = categories.find((item) => item.id === budget.categoryId);
-      const categoryId = category?.id ?? '';
-      const actualAmount = actualByCategory.get(categoryId) ?? 0;
-      return {
-        id: budget.id,
-        categoryId,
-        name: category?.name ?? '未分類',
-        budgetAmount: budget.budgetAmount,
-        actualAmount,
-        remainingAmount: budget.budgetAmount - actualAmount,
-        usageRate:
-          budget.budgetAmount > 0
-            ? Math.round((actualAmount / budget.budgetAmount) * 100)
-            : 0,
-      };
-    });
-
-    const uncategorizedActual = actualByCategory.get('') ?? 0;
-    if (uncategorizedActual > 0) {
-      comparisons.push({
-        id: '',
-        categoryId: '',
-        name: '未分類',
-        budgetAmount: 0,
-        actualAmount: uncategorizedActual,
-        remainingAmount: -uncategorizedActual,
-        usageRate: 0,
-      });
-    }
-
-    return comparisons;
-  }, [targetMonth, categories, variableCategoryBudgets, variableCosts]);
+  const categoryComparisons = useMemo(() => calculateCategoryComparisons({
+    targetMonth,
+    categories,
+    variableCategoryBudgets,
+    variableCosts,
+  }), [targetMonth, categories, variableCategoryBudgets, variableCosts]);
 
   return {
     currentMonth,

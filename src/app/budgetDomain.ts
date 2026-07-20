@@ -1,12 +1,16 @@
 import type {
   AnnualCost,
   AnnualIncome,
+  Category,
+  CategoryComparison,
+  CategoryGroup,
   FixedCost,
   Income,
   MonthlyBudget,
   SavingGoal,
   VariableCategoryBudget,
   VariableCost,
+  VariableCostBreakdown,
 } from './types';
 
 export function normalizeMonthlyBudgets(items: MonthlyBudget[]): MonthlyBudget[] {
@@ -194,3 +198,126 @@ export function calculateBudgetTotals({
   };
 }
 
+export function calculateCategoryComparisons({
+  targetMonth,
+  categories,
+  variableCategoryBudgets,
+  variableCosts,
+}: {
+  targetMonth: string;
+  categories: Category[];
+  variableCategoryBudgets: VariableCategoryBudget[];
+  variableCosts: VariableCost[];
+}): CategoryComparison[] {
+  const categoryIds = new Set(categories.map((category) => category.id));
+  const actualByCategory = new Map<string, number>();
+
+  variableCosts
+    .filter((item) => item.month.slice(0, 7) === targetMonth)
+    .forEach((item) => {
+      const categoryId = item.categoryId && categoryIds.has(item.categoryId) ? item.categoryId : '';
+      actualByCategory.set(categoryId, (actualByCategory.get(categoryId) ?? 0) + item.amount);
+    });
+
+  const comparisons: CategoryComparison[] = variableCategoryBudgets.map((budget) => {
+    const category = categories.find((item) => item.id === budget.categoryId);
+    const categoryId = category?.id ?? '';
+    const actualAmount = actualByCategory.get(categoryId) ?? 0;
+    return {
+      id: budget.id,
+      categoryId,
+      name: category?.name ?? '未分類',
+      budgetAmount: budget.budgetAmount,
+      actualAmount,
+      remainingAmount: budget.budgetAmount - actualAmount,
+      usageRate:
+        budget.budgetAmount > 0
+          ? Math.round((actualAmount / budget.budgetAmount) * 100)
+          : 0,
+    };
+  });
+
+  const uncategorizedActual = actualByCategory.get('') ?? 0;
+  if (uncategorizedActual > 0) {
+    comparisons.push({
+      id: '',
+      categoryId: '',
+      name: '未分類',
+      budgetAmount: 0,
+      actualAmount: uncategorizedActual,
+      remainingAmount: -uncategorizedActual,
+      usageRate: 0,
+    });
+  }
+
+  return comparisons;
+}
+
+export function calculateVariableCostBreakdown({
+  mode,
+  targetMonth,
+  selectedGroupId,
+  variableCosts,
+  categoryGroups,
+  categories,
+}: {
+  mode: 'monthly' | 'yearly';
+  targetMonth: string;
+  selectedGroupId: string | null;
+  variableCosts: VariableCost[];
+  categoryGroups: CategoryGroup[];
+  categories: Category[];
+}): VariableCostBreakdown {
+  const isYearly = mode === 'yearly';
+  const targetYear = targetMonth.slice(0, 4);
+  const categoryById = new Map(categories.map((category) => [category.id, category]));
+  const groupIds = new Set(categoryGroups.map((group) => group.id));
+  const targetCosts = variableCosts.filter((item) =>
+    isYearly ? item.month.slice(0, 4) === targetYear : item.month.slice(0, 7) === targetMonth,
+  );
+  const groupTotals = new Map<string, number>();
+  const categoryTotals = new Map<string, number>();
+
+  targetCosts.forEach((cost) => {
+    const category = cost.categoryId ? categoryById.get(cost.categoryId) : undefined;
+    const groupId = cost.categoryGroupId || category?.groupId || '';
+    groupTotals.set(groupId, (groupTotals.get(groupId) ?? 0) + cost.amount);
+    if (selectedGroupId !== null && groupId === selectedGroupId) {
+      const categoryId = category && category.groupId === selectedGroupId ? category.id : '';
+      categoryTotals.set(categoryId, (categoryTotals.get(categoryId) ?? 0) + cost.amount);
+    }
+  });
+
+  const total = Array.from(groupTotals.values()).reduce((sum, amount) => sum + amount, 0);
+  const selectedGroupTotal = selectedGroupId ? groupTotals.get(selectedGroupId) ?? 0 : total;
+  const sourceEntries = selectedGroupId
+    ? Array.from(categoryTotals.entries())
+    : Array.from(groupTotals.entries());
+  const entries = sourceEntries
+    .map(([sourceId, amount], order) => ({
+      sourceId,
+      amount,
+      rate: (selectedGroupId ? selectedGroupTotal : total) > 0
+        ? Math.round((amount / (selectedGroupId ? selectedGroupTotal : total)) * 1000) / 10
+        : 0,
+      order,
+      kind: sourceId
+        ? selectedGroupId
+          ? 'category' as const
+          : groupIds.has(sourceId)
+            ? 'group' as const
+            : 'deleted-group' as const
+        : 'uncategorized' as const,
+    }))
+    .filter((item) => item.amount > 0)
+    .sort((a, b) => b.amount - a.amount);
+
+  return {
+    total,
+    selectedGroupTotal,
+    selectedGroupState: selectedGroupId
+      ? groupIds.has(selectedGroupId) ? 'existing' : 'deleted'
+      : 'none',
+    entries,
+  };
+}

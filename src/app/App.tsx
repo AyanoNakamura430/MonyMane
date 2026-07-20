@@ -41,7 +41,7 @@ import type {
   VariableCost,
 } from './types';
 import { parseBackupJson } from './backup';
-import { normalizeMonthlyBudgets } from './budgetDomain';
+import { calculateVariableCostBreakdown, normalizeMonthlyBudgets } from './budgetDomain';
 import {
   createId,
   STORAGE_KEYS,
@@ -914,45 +914,30 @@ function VariableCostBreakdownCard({
   onSelectGroup: (groupId: string | null) => void;
 }) {
   const isYearly = mode === 'yearly';
-  const targetYear = data.targetMonth.slice(0, 4);
   const categoryById = new Map(data.categories.map((category) => [category.id, category]));
   const groupById = new Map(data.categoryGroups.map((group) => [group.id, group]));
-  const targetCosts = data.variableCosts.filter((item) =>
-    isYearly ? item.month.slice(0, 4) === targetYear : item.month.slice(0, 7) === data.targetMonth,
-  );
-  const groupTotals = new Map<string, number>();
-  const categoryTotals = new Map<string, number>();
-
-  targetCosts.forEach((cost) => {
-    const category = cost.categoryId ? categoryById.get(cost.categoryId) : undefined;
-    const groupId = cost.categoryGroupId || category?.groupId || '';
-    groupTotals.set(groupId, (groupTotals.get(groupId) ?? 0) + cost.amount);
-    if (selectedGroupId !== null && groupId === selectedGroupId) {
-      const categoryId = category && category.groupId === selectedGroupId ? category.id : '';
-      categoryTotals.set(categoryId, (categoryTotals.get(categoryId) ?? 0) + cost.amount);
-    }
+  const breakdown = calculateVariableCostBreakdown({
+    mode: isYearly ? 'yearly' : 'monthly',
+    targetMonth: data.targetMonth,
+    selectedGroupId,
+    variableCosts: data.variableCosts,
+    categoryGroups: data.categoryGroups,
+    categories: data.categories,
   });
-
-  const total = Array.from(groupTotals.values()).reduce((sum, amount) => sum + amount, 0);
-  const selectedGroupTotal = selectedGroupId ? groupTotals.get(selectedGroupId) ?? 0 : total;
-  const sourceEntries = selectedGroupId
-    ? Array.from(categoryTotals.entries())
-    : Array.from(groupTotals.entries());
-  const items = sourceEntries
-    .map(([id, amount], index): BreakdownItem => {
-      const category = selectedGroupId ? categoryById.get(id) : undefined;
-      const group = selectedGroupId ? undefined : groupById.get(id);
-      const baseTotal = selectedGroupId ? selectedGroupTotal : total;
-      return {
-        id: id || 'uncategorized',
-        name: category?.name ?? group?.name ?? (id ? '削除済みカテゴリ' : '未分類'),
-        amount,
-        rate: baseTotal > 0 ? Math.round((amount / baseTotal) * 1000) / 10 : 0,
-        color: category?.color ?? group?.color ?? chartColors[index % chartColors.length],
-      };
-    })
-    .filter((item) => item.amount > 0)
-    .sort((a, b) => b.amount - a.amount);
+  const { total, selectedGroupTotal } = breakdown;
+  const items = breakdown.entries.map((entry): BreakdownItem => {
+    const category = entry.kind === 'category' ? categoryById.get(entry.sourceId) : undefined;
+    const group = entry.kind === 'group' ? groupById.get(entry.sourceId) : undefined;
+    return {
+      id: entry.sourceId || 'uncategorized',
+      name: category?.name
+        ?? group?.name
+        ?? (entry.kind === 'deleted-group' ? '削除済みカテゴリ' : '未分類'),
+      amount: entry.amount,
+      rate: entry.rate,
+      color: category?.color ?? group?.color ?? chartColors[entry.order % chartColors.length],
+    };
+  });
   const selectedGroupName = selectedGroupId ? groupById.get(selectedGroupId)?.name ?? '削除済みカテゴリ' : '';
   const title = selectedGroupId ? `${selectedGroupName}の内訳` : '変動費の内訳';
 
