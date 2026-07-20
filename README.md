@@ -33,6 +33,7 @@ MonyManeは、ブラウザ上で収入・固定費・変動費・予算を管理
 - Vite 6
 - Tailwind CSS 4
 - TypeScript 7.0.2（型検査）
+- Vitest 4.1.10（データ処理のunit test）
 - Recharts
 - Lucide React
 - Radix UI / shadcn/ui由来のUIコンポーネント群
@@ -78,11 +79,22 @@ npm run preview
 
 # 現行アプリの型検査
 npm run typecheck
+
+# unit testの型検査
+npm run typecheck:test
+
+# unit testを1回実行
+npm run test
+
+# unit testを監視実行
+npm run test:watch
 ```
 
 typecheckは`src/main.tsx`を起点に、現行アプリから参照されるコードだけを対象とします。`vite.config.ts`と未参照コードは対象外です。
 
-lint、format、unit test、component test、E2E testは現時点で未整備です。
+unit testはNode環境で実行し、月間予算の重複正規化、version 1からversion 2への移行、backup version 1・2の解析・復元、基本的な月次・年次集計を対象とします。unit testの実行にはNode.js 20以上が必要です。この条件はVitestの実行要件であり、MonyMane全体の正式対応Node.jsバージョンではありません。
+
+lint、format、component test、E2E test、coverageは現時点で未整備です。jsdomとReact Testing Libraryも未導入のため、UI・Hook統合テストは対象外です。
 
 ## 使い方
 

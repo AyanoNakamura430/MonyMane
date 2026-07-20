@@ -49,7 +49,11 @@
 - [ ] 正式なNode.js対応バージョンを決めた後、`@types/node`と`vite.config.ts`用typecheckを導入する
 - [ ] 未参照コードの扱いを決めた後、必要なコードをtypecheck対象へ追加する
 - [ ] TypeScript importの拡張子表記を統一するか検討する
-- [ ] 集計・正規化・移行処理のunit testを導入する
+- [x] P0初回範囲として、月間予算の重複正規化、version 1からversion 2への移行、backup version 1・2、基本的な月次・年次集計のunit testを導入する
+- [ ] P1として、カテゴリ別・グループ別内訳、削除制約、storageの全削除・一括保存、入力値整形のunit testを追加する
+- [ ] `budgetStorage.ts`を追加し、localStorageの読み書きと全削除をunit testで保護する
+- [ ] coverage、jsdom、React Testing Libraryを必要性の確認後に導入する
+- [ ] カテゴリ予算からだけ参照されているカテゴリを削除できる既知の不整合について、期待仕様を決定してから修正とテストを行う
 - [ ] 入力フォームと削除制約のcomponent testを導入する
 - [ ] 主要な登録・集計・バックアップ操作のE2E testを導入する
 - [ ] CIでbuild、lint、typecheck、testを実行する

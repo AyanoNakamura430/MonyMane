@@ -40,9 +40,10 @@ import type {
   VariableCategoryBudget,
   VariableCost,
 } from './types';
+import { parseBackupJson } from './backup';
+import { normalizeMonthlyBudgets } from './budgetDomain';
 import {
   createId,
-  normalizeMonthlyBudgets,
   STORAGE_KEYS,
   type BudgetData,
   useBudgetData,
@@ -2081,12 +2082,13 @@ function SettingsScreen({ data }: { data: BudgetData }) {
     if (!file) return;
 
     try {
-      const parsed = JSON.parse(await file.text()) as unknown;
-      const backup = parseBackupFile(parsed);
-      if (!backup) {
+      const parsed = parseBackupJson(await file.text());
+      if (!parsed.ok) {
+        if (parsed.reason === 'invalid-json') throw new Error('invalid-json');
         setMessage({ type: 'error', text: 'このファイルは家計簿アプリ用のバックアップデータではありません。' });
         return;
       }
+      const backup = parsed.backup;
 
       const confirmed = window.confirm(
         '現在の家計簿データはすべて上書きされます。バックアップJSONから完全復元してよろしいですか？',

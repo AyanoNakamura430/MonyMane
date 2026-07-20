@@ -95,12 +95,19 @@ npm run dev
 npm run build
 npm run preview
 npm run typecheck
+npm run typecheck:test
+npm run test
+npm run test:watch
 ```
 
 - パッケージマネージャーはnpmです。
 - `npm run typecheck`は`src/main.tsx`を起点に、現行アプリから参照されるコードだけを検査します。
 - `vite.config.ts`、`src/app/components`および`src/imports`の未参照コードは、現在のtypecheck対象外です。
-- lint、format、unit test、component test、E2E testは現時点で未整備です。
+- `npm run test`はNode環境でデータ移行、バックアップ、月間予算正規化、基本集計のunit testを1回実行します。
+- `npm run test:watch`は同じunit testを監視実行します。
+- `npm run typecheck:test`は初回unit testと、そのテスト対象の純粋関数を型検査します。
+- unit testの実行にはNode.js 20以上が必要です。これはVitestの実行要件であり、MonyMane全体の正式対応Node.jsバージョンではありません。
+- lint、format、component test、E2E testは現時点で未整備です。coverage、jsdom、React Testing Libraryも未導入です。
 - 存在しないコマンドを実行可能として案内しないでください。
 - Node.jsの正式な対応バージョンは未確定です。ローカルで動作したバージョンを、そのまま対応範囲として確定しないでください。
 

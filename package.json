@@ -7,7 +7,10 @@
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --project tsconfig.app.json --pretty false"
+    "typecheck": "tsc --project tsconfig.app.json --pretty false",
+    "test": "vitest run --config vitest.config.ts",
+    "test:watch": "vitest --config vitest.config.ts",
+    "typecheck:test": "tsc --project tsconfig.test.json --pretty false"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",
@@ -73,7 +76,8 @@
     "@vitejs/plugin-react": "4.7.0",
     "tailwindcss": "4.1.12",
     "typescript": "7.0.2",
-    "vite": "6.3.5"
+    "vite": "6.3.5",
+    "vitest": "4.1.10"
   },
   "peerDependencies": {
     "react": "18.3.1",
