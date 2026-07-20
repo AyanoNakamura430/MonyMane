@@ -94,10 +94,13 @@ MonyManeは、収入・固定費・変動費・月間予算・年間見積・貯
 npm run dev
 npm run build
 npm run preview
+npm run typecheck
 ```
 
 - パッケージマネージャーはnpmです。
-- lint、format、typecheck、unit test、component test、E2E testは現時点で未整備です。
+- `npm run typecheck`は`src/main.tsx`を起点に、現行アプリから参照されるコードだけを検査します。
+- `vite.config.ts`、`src/app/components`および`src/imports`の未参照コードは、現在のtypecheck対象外です。
+- lint、format、unit test、component test、E2E testは現時点で未整備です。
 - 存在しないコマンドを実行可能として案内しないでください。
 - Node.jsの正式な対応バージョンは未確定です。ローカルで動作したバージョンを、そのまま対応範囲として確定しないでください。
 
@@ -111,4 +114,3 @@ npm run preview
 4. 実行できなかった確認
 5. 未確定事項または残課題
 6. コミットを行ったかどうか
-

@@ -445,6 +445,7 @@ export function useBudgetData() {
     if (uncategorizedActual > 0) {
       comparisons.push({
         id: '',
+        categoryId: '',
         name: '未分類',
         budgetAmount: 0,
         actualAmount: uncategorizedActual,

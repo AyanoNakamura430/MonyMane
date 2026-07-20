@@ -18,6 +18,7 @@
 - [x] backup version 2のJSONエクスポート
 - [x] backup version 1・2のJSONインポート
 - [x] 家計簿関連データの全削除
+- [x] `src/main.tsx`起点のstrictなtypecheck導入
 - [x] v1.0.0タグの作成とリリース
 
 ## Next candidates
@@ -44,7 +45,10 @@
 
 - [ ] ESLintを導入し、`lint`コマンドを整備する
 - [ ] formatterを選定・導入し、`format`コマンドを整備する
-- [ ] TypeScript設定と`typecheck`コマンドを整備する
+- [x] TypeScript設定と`typecheck`コマンドを整備する
+- [ ] 正式なNode.js対応バージョンを決めた後、`@types/node`と`vite.config.ts`用typecheckを導入する
+- [ ] 未参照コードの扱いを決めた後、必要なコードをtypecheck対象へ追加する
+- [ ] TypeScript importの拡張子表記を統一するか検討する
 - [ ] 集計・正規化・移行処理のunit testを導入する
 - [ ] 入力フォームと削除制約のcomponent testを導入する
 - [ ] 主要な登録・集計・バックアップ操作のE2E testを導入する
@@ -64,4 +68,3 @@
 - [ ] カテゴリ別予算をUIで管理する必要性を再評価する
 - [ ] PWA・オフライン利用要件を検討する
 - [ ] アクセシビリティ監査を行う
-

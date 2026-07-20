@@ -32,6 +32,7 @@ MonyManeは、ブラウザ上で収入・固定費・変動費・予算を管理
 - TypeScript / TSX
 - Vite 6
 - Tailwind CSS 4
+- TypeScript 7.0.2（型検査）
 - Recharts
 - Lucide React
 - Radix UI / shadcn/ui由来のUIコンポーネント群
@@ -74,9 +75,14 @@ npm run build
 
 # ビルド結果のローカル確認
 npm run preview
+
+# 現行アプリの型検査
+npm run typecheck
 ```
 
-lint、format、typecheck、unit test、component test、E2E testは現時点で未整備です。
+typecheckは`src/main.tsx`を起点に、現行アプリから参照されるコードだけを対象とします。`vite.config.ts`と未参照コードは対象外です。
+
+lint、format、unit test、component test、E2E testは現時点で未整備です。
 
 ## 使い方
 
@@ -124,6 +130,7 @@ MonyMane/
 ├─ AGENTS.md                   # AIエージェント向け開発ルール
 ├─ RELEASE_CHECKLIST.md        # リリース時の確認項目
 ├─ package.json
+├─ tsconfig.app.json           # 現行アプリ用の型検査設定
 └─ vite.config.ts
 ```
 
@@ -135,7 +142,8 @@ MonyMane/
 - データはブラウザのlocalStorageにのみ保存されます。
 - localStorage保存失敗時の明示的なユーザー通知はありません。
 - JSONインポートは完全なスキーマ検証ではありません。
-- lint、format、typecheck、自動テスト、CIは未整備です。
+- lint、format、自動テスト、CIは未整備です。
+- `vite.config.ts`と未参照コードは現在のtypecheck対象外です。
 - `src/app/App.tsx`に複数の責務が集中しています。
 - 未参照コードの調査・整理は未着手です。
 - 正式な対応Node.jsバージョンは未確定です。

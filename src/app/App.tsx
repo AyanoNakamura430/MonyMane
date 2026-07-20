@@ -1283,16 +1283,16 @@ function ItemManager({
       'categoryId' in item && category.id === item.categoryId
     ))?.name ?? ('yearMonth' in item ? `${formatMonth(item.yearMonth)}の予算` : '未分類');
     if (!window.confirm(`「${itemName}」を削除しますか？`)) return;
-    if (section === 'income') {
+    if (section === 'income' && 'id' in item) {
       data.setIncomes((current) => current.filter((x) => x.id !== item.id));
     }
-    if (section === 'fixed') {
+    if (section === 'fixed' && 'id' in item) {
       data.setFixedCosts((current) => current.filter((x) => x.id !== item.id));
     }
-    if (section === 'variableCost') {
+    if (section === 'variableCost' && 'id' in item) {
       data.setVariableCosts((current) => current.filter((x) => x.id !== item.id));
     }
-    if (section === 'categoryGroup') {
+    if (section === 'categoryGroup' && 'id' in item) {
       const childCategories = data.categories.some((category) => category.groupId === item.id);
       const usedByCost = data.variableCosts.some((cost) => cost.categoryGroupId === item.id);
       if (childCategories || usedByCost) {
@@ -1306,7 +1306,7 @@ function ItemManager({
       }
       data.setCategoryGroups((current) => current.filter((x) => x.id !== item.id));
     }
-    if (section === 'category') {
+    if (section === 'category' && 'id' in item) {
       const usedByCost = data.variableCosts.some((cost) => cost.categoryId === item.id);
       if (usedByCost) {
         setMessage({ type: 'error', text: '使用中のカテゴリは削除できません。' });
@@ -1314,13 +1314,13 @@ function ItemManager({
       }
       data.setCategories((current) => current.filter((x) => x.id !== item.id));
     }
-    if (section === 'monthlyBudget') {
+    if (section === 'monthlyBudget' && 'yearMonth' in item) {
       data.setMonthlyBudgets((current) => current.filter((x) => x.yearMonth !== item.yearMonth));
     }
-    if (section === 'annualIncome') {
+    if (section === 'annualIncome' && 'id' in item) {
       data.setAnnualIncomes((current) => current.filter((x) => x.id !== item.id));
     }
-    if (section === 'annual') {
+    if (section === 'annual' && 'id' in item) {
       data.setAnnualCosts((current) => current.filter((x) => x.id !== item.id));
     }
     if (
@@ -1452,8 +1452,11 @@ function ItemForm({
   const initialAmount = editingItem && section !== 'category' && section !== 'categoryGroup' && section !== 'monthlyBudget'
     ? 'budgetAmount' in editingItem
       ? editingItem.budgetAmount
-      : editingItem.amount
+      : 'amount' in editingItem
+        ? editingItem.amount
+        : ''
     : '';
+  const editingId = editingItem && 'id' in editingItem ? editingItem.id : undefined;
   const [name, setName] = useState(editingItem && 'name' in editingItem ? editingItem.name : '');
   const [amount, setAmount] = useState(formatAmountInput(initialAmount));
   const [memo, setMemo] = useState(editingItem && 'memo' in editingItem ? editingItem.memo ?? '' : '');
@@ -1464,7 +1467,7 @@ function ItemForm({
     editingItem && 'icon' in editingItem && editingItem.icon ? editingItem.icon : '',
   );
   const [month, setMonth] = useState(
-    editingItem && 'month' in editingItem
+    editingItem && 'month' in editingItem && typeof editingItem.month === 'string'
       ? editingItem.month
       : editingItem && 'yearMonth' in editingItem
         ? `${editingItem.yearMonth}-01`
@@ -1538,7 +1541,7 @@ function ItemForm({
     if (section === 'category') {
       const duplicate = data.categories.some(
         (category) =>
-          category.id !== editingItem?.id
+          category.id !== editingId
           && category.groupId === categoryGroupId
           && category.name.trim().toLowerCase() === name.trim().toLowerCase(),
       );
@@ -1550,7 +1553,7 @@ function ItemForm({
     if (section === 'categoryGroup') {
       const duplicate = data.categoryGroups.some(
         (group) =>
-          group.id !== editingItem?.id
+          group.id !== editingId
           && group.name.trim().toLowerCase() === name.trim().toLowerCase(),
       );
       if (duplicate) {
@@ -1690,7 +1693,7 @@ function ItemForm({
         {editingItem && (
           <button
             type="button"
-            onClick={onFinish}
+            onClick={() => onFinish()}
             className="flex min-h-11 min-w-11 items-center justify-center rounded-[5px] text-[#717182] hover:bg-[#f2f2f2]"
             aria-label="編集をキャンセル"
           >
@@ -1877,7 +1880,7 @@ function ItemRow({
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <h3 className="truncate text-base font-normal text-[#0a0a0a]">{itemName}</h3>
-          {'month' in item && (
+          {'month' in item && typeof item.month === 'string' && (
             <p className="mt-1 font-['Khand',sans-serif] text-sm text-[#717182]">
               {formatDate(item.month)}
             </p>
@@ -1904,7 +1907,7 @@ function ItemRow({
           </strong>
         )}
       </div>
-      {item.memo && (
+      {'memo' in item && item.memo && (
         <p className="mt-3 border-t border-[#e5e7eb] pt-3 text-sm font-light leading-6 text-[#717182]">
           {item.memo}
         </p>
