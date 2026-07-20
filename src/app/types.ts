@@ -20,6 +20,7 @@ export type FixedCost = {
 
 export type Category = {
   id: string;
+  groupId: string;
   name: string;
   color?: string;
   icon?: string;
@@ -28,9 +29,19 @@ export type Category = {
   updatedAt: string;
 };
 
+export type CategoryGroup = {
+  id: string;
+  name: string;
+  color?: string;
+  icon?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type VariableCategoryBudget = {
   id: string;
   categoryId: string;
+  month?: string;
   budgetAmount: number;
   memo?: string;
   createdAt: string;
@@ -43,11 +54,20 @@ export type LegacyVariableCategory = Category & {
 
 export type VariableCost = {
   id: string;
-  categoryId: string;
+  categoryGroupId?: string;
+  categoryId?: string;
   name: string;
   amount: number;
   memo?: string;
   month: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type MonthlyBudget = {
+  yearMonth: string;
+  fixedExpenseBudget: number;
+  variableExpenseBudget: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -79,8 +99,9 @@ export type BudgetSection =
   | 'income'
   | 'fixed'
   | 'variableCost'
+  | 'categoryGroup'
   | 'category'
-  | 'variable'
+  | 'monthlyBudget'
   | 'annualIncome'
   | 'annual'
   | 'saving';

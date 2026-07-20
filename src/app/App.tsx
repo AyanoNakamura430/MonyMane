@@ -26,18 +26,27 @@ import {
   WalletCards,
   X,
 } from 'lucide-react';
+import { Cell, Pie, PieChart, ResponsiveContainer } from 'recharts';
 import type {
   AnnualCost,
   AnnualIncome,
   BudgetSection,
   Category,
+  CategoryGroup,
   FixedCost,
   Income,
+  MonthlyBudget,
   SavingGoal,
   VariableCategoryBudget,
   VariableCost,
 } from './types';
-import { createId, STORAGE_KEYS, type BudgetData, useBudgetData } from './useBudgetData';
+import {
+  createId,
+  normalizeMonthlyBudgets,
+  STORAGE_KEYS,
+  type BudgetData,
+  useBudgetData,
+} from './useBudgetData';
 
 type Screen = 'dashboard' | 'manage' | 'settings';
 type DashboardMode = 'monthly' | 'yearly';
@@ -45,15 +54,17 @@ type BackupData = {
   incomes: Income[];
   fixedCosts: FixedCost[];
   variableCosts: VariableCost[];
+  categoryGroups: CategoryGroup[];
   categories: Category[];
   variableCategoryBudgets: VariableCategoryBudget[];
+  monthlyBudgets: MonthlyBudget[];
   annualIncomes: AnnualIncome[];
   annualCosts: AnnualCost[];
   savingGoal: SavingGoal;
 };
 type BackupFile = {
   app: 'budget-app';
-  version: 1;
+  version: 1 | 2;
   exportedAt: string;
   data: BackupData;
 };
@@ -61,20 +72,21 @@ type Message = {
   type: 'success' | 'error';
   text: string;
 };
-type CategoryProgressItem = {
+type BreakdownItem = {
   id: string;
   name: string;
-  budgetAmount: number;
-  actualAmount: number;
-  remainingAmount: number;
-  usageRate: number;
+  amount: number;
+  rate: number;
+  color: string;
 };
 type EditableItem =
   | Income
   | FixedCost
   | VariableCost
+  | CategoryGroup
   | Category
   | VariableCategoryBudget
+  | MonthlyBudget
   | AnnualIncome
   | AnnualCost;
 
@@ -82,8 +94,9 @@ const SECTION_LABELS: Record<BudgetSection, string> = {
   income: '収入',
   fixed: '固定費',
   variableCost: '変動費実績',
+  categoryGroup: 'グループカテゴリ',
   category: 'カテゴリ',
-  variable: '変動費カテゴリ予算',
+  monthlyBudget: '月間予算',
   annualIncome: '年間収入',
   annual: '年間固定費',
   saving: '貯金目標',
@@ -99,13 +112,15 @@ const inputClass =
   'w-full rounded-[5px] border border-[#717182]/45 bg-white px-4 py-3 text-base font-normal text-[#0a0a0a] outline-none transition-shadow placeholder:text-[#a8a8a8] focus:border-[#2c2c2c] focus:ring-2 focus:ring-[#2c2c2c]/10';
 
 const BACKUP_APP_ID = 'budget-app';
-const BACKUP_VERSION = 1;
+const BACKUP_VERSION = 2;
 const BACKUP_DATA_KEYS: (keyof BackupData)[] = [
   'incomes',
   'fixedCosts',
   'variableCosts',
+  'categoryGroups',
   'categories',
   'variableCategoryBudgets',
+  'monthlyBudgets',
   'annualIncomes',
   'annualCosts',
   'savingGoal',
@@ -115,15 +130,17 @@ const EMPTY_BACKUP_DATA: BackupData = {
   incomes: [],
   fixedCosts: [],
   variableCosts: [],
+  categoryGroups: [],
   categories: [],
   variableCategoryBudgets: [],
+  monthlyBudgets: [],
   annualIncomes: [],
   annualCosts: [],
   savingGoal: { amount: 0, updatedAt: new Date(0).toISOString() },
 };
 
 function formatCurrency(amount: number) {
-  return currencyFormatter.format(amount);
+  return currencyFormatter.format(Number.isFinite(amount) ? amount : 0);
 }
 
 function formatBackupTimestamp(date: Date) {
@@ -153,12 +170,21 @@ function isSavingGoal(value: unknown): value is SavingGoal {
 }
 
 function migrateLegacyBackupCategories(value: unknown): {
+  categoryGroups: CategoryGroup[];
   categories: Category[];
   variableCategoryBudgets: VariableCategoryBudget[];
 } | null {
   if (!Array.isArray(value)) return null;
+  const legacyGroup: CategoryGroup = {
+    id: 'legacy-category-group',
+    name: '旧カテゴリ',
+    color: '#717182',
+    icon: 'archive',
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+  };
 
-  return value.reduce<{
+  const migrated = value.reduce<{
     categories: Category[];
     variableCategoryBudgets: VariableCategoryBudget[];
   }>(
@@ -177,6 +203,7 @@ function migrateLegacyBackupCategories(value: unknown): {
 
       result.categories.push({
         id: item.id,
+        groupId: legacyGroup.id,
         name: categoryName,
         color: typeof item.color === 'string' ? item.color : undefined,
         icon: typeof item.icon === 'string' ? item.icon : undefined,
@@ -196,10 +223,104 @@ function migrateLegacyBackupCategories(value: unknown): {
     },
     { categories: [], variableCategoryBudgets: [] },
   );
+  return { categoryGroups: migrated.categories.length > 0 ? [legacyGroup] : [], ...migrated };
+}
+
+function normalizeBackupCategories(
+  rawCategories: unknown,
+  rawGroups: unknown,
+): { categoryGroups: CategoryGroup[]; categories: Category[] } | null {
+  if (!Array.isArray(rawCategories)) return null;
+  const legacyGroup: CategoryGroup = {
+    id: 'legacy-category-group',
+    name: '旧カテゴリ',
+    color: '#717182',
+    icon: 'archive',
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+  };
+  const categories = rawCategories
+    .filter((item): item is Record<string, unknown> =>
+      isRecord(item) && typeof item.id === 'string' && typeof item.name === 'string',
+    )
+    .map((item) => ({
+      id: item.id as string,
+      groupId: typeof item.groupId === 'string' && item.groupId ? item.groupId : legacyGroup.id,
+      name: (item.name as string).trim(),
+      color: typeof item.color === 'string' ? item.color : undefined,
+      icon: typeof item.icon === 'string' ? item.icon : undefined,
+      memo: typeof item.memo === 'string' ? item.memo : undefined,
+      createdAt: typeof item.createdAt === 'string' ? item.createdAt : new Date(0).toISOString(),
+      updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : new Date(0).toISOString(),
+    }))
+    .filter((item) => item.name);
+  const groups = Array.isArray(rawGroups)
+    ? rawGroups.filter((item): item is CategoryGroup =>
+        isRecord(item)
+        && typeof item.id === 'string'
+        && typeof item.name === 'string'
+        && item.name.trim() !== '',
+      )
+    : [];
+  const needsLegacyGroup = categories.some((category) => category.groupId === legacyGroup.id);
+  return {
+    categoryGroups: needsLegacyGroup && !groups.some((group) => group.id === legacyGroup.id)
+      ? [legacyGroup, ...groups]
+      : groups,
+    categories,
+  };
+}
+
+function migrateMonthlyBudgets(
+  rawMonthlyBudgets: unknown,
+  rawVariableCategoryBudgets: unknown,
+): MonthlyBudget[] {
+  if (Array.isArray(rawMonthlyBudgets)) {
+    const normalizedBudgets = normalizeMonthlyBudgets(rawMonthlyBudgets
+      .filter((item): item is Record<string, unknown> =>
+        isRecord(item) && typeof item.yearMonth === 'string',
+      )
+      .map((item) => ({
+        yearMonth: (item.yearMonth as string).slice(0, 7),
+        fixedExpenseBudget:
+          typeof item.fixedExpenseBudget === 'number' && Number.isFinite(item.fixedExpenseBudget)
+            ? Math.max(0, item.fixedExpenseBudget)
+            : 0,
+        variableExpenseBudget:
+          typeof item.variableExpenseBudget === 'number' && Number.isFinite(item.variableExpenseBudget)
+            ? Math.max(0, item.variableExpenseBudget)
+            : 0,
+        createdAt: typeof item.createdAt === 'string' ? item.createdAt : new Date(0).toISOString(),
+        updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : '',
+      })));
+    return normalizedBudgets.map((item) => ({
+      ...item,
+      updatedAt: Number.isFinite(Date.parse(item.updatedAt))
+        ? item.updatedAt
+        : new Date(0).toISOString(),
+    }));
+  }
+  if (!Array.isArray(rawVariableCategoryBudgets)) return [];
+  const now = new Date().toISOString();
+  const total = rawVariableCategoryBudgets.reduce((sum, item) => {
+    if (!isRecord(item) || typeof item.budgetAmount !== 'number' || !Number.isFinite(item.budgetAmount)) {
+      return sum;
+    }
+    return sum + item.budgetAmount;
+  }, 0);
+  return total > 0
+    ? [{
+        yearMonth: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`,
+        fixedExpenseBudget: 0,
+        variableExpenseBudget: total,
+        createdAt: now,
+        updatedAt: now,
+      }]
+    : [];
 }
 
 function parseBackupFile(value: unknown): BackupFile | null {
-  if (!isRecord(value) || value.app !== BACKUP_APP_ID || value.version !== BACKUP_VERSION) {
+  if (!isRecord(value) || value.app !== BACKUP_APP_ID || (value.version !== 1 && value.version !== 2)) {
     return null;
   }
   if (typeof value.exportedAt !== 'string' || !isRecord(value.data)) {
@@ -207,22 +328,31 @@ function parseBackupFile(value: unknown): BackupFile | null {
   }
 
   const backupData = value.data;
-  const arraysValid = BACKUP_DATA_KEYS.every((key) =>
-    key === 'savingGoal' ? true : Array.isArray(backupData[key]),
-  );
-  const migratedLegacyCategories = arraysValid
+  const requiredArraysValid = [
+    'incomes',
+    'fixedCosts',
+    'variableCosts',
+    'annualIncomes',
+    'annualCosts',
+  ].every((key) => Array.isArray(backupData[key]));
+  const normalizedCategories = normalizeBackupCategories(backupData.categories, backupData.categoryGroups);
+  const migratedLegacyCategories = normalizedCategories
     ? null
     : migrateLegacyBackupCategories(backupData.variableCategories);
-  if ((!arraysValid && !migratedLegacyCategories) || !isSavingGoal(backupData.savingGoal)) {
+  if (
+    !requiredArraysValid
+    || (!normalizedCategories && !migratedLegacyCategories)
+    || !isSavingGoal(backupData.savingGoal)
+  ) {
     return null;
   }
 
-  const categories = arraysValid
-    ? backupData.categories as Category[]
-    : migratedLegacyCategories?.categories ?? [];
-  const variableCategoryBudgets = arraysValid
+  const categoryGroups = normalizedCategories?.categoryGroups ?? migratedLegacyCategories?.categoryGroups ?? [];
+  const categories = normalizedCategories?.categories ?? migratedLegacyCategories?.categories ?? [];
+  const variableCategoryBudgets = Array.isArray(backupData.variableCategoryBudgets)
     ? backupData.variableCategoryBudgets as VariableCategoryBudget[]
     : migratedLegacyCategories?.variableCategoryBudgets ?? [];
+  const monthlyBudgets = migrateMonthlyBudgets(backupData.monthlyBudgets, variableCategoryBudgets);
 
   return {
     app: BACKUP_APP_ID,
@@ -232,8 +362,10 @@ function parseBackupFile(value: unknown): BackupFile | null {
       incomes: backupData.incomes as Income[],
       fixedCosts: backupData.fixedCosts as FixedCost[],
       variableCosts: backupData.variableCosts as VariableCost[],
+      categoryGroups,
       categories,
       variableCategoryBudgets,
+      monthlyBudgets,
       annualIncomes: backupData.annualIncomes as AnnualIncome[],
       annualCosts: backupData.annualCosts as AnnualCost[],
       savingGoal: backupData.savingGoal,
@@ -363,15 +495,20 @@ function MonthPicker({
   value,
   onChange,
   mode,
+  variant = 'header',
+  ariaLabel = '対象年月を選択',
 }: {
   value: string;
   onChange: (value: string) => void;
   mode: DashboardMode;
+  variant?: 'header' | 'field';
+  ariaLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [viewYear, setViewYear] = useState(Number(value.slice(0, 4)));
   const containerRef = useRef<HTMLDivElement>(null);
   const selectedMonth = Number(value.slice(5, 7));
+  const isField = variant === 'field';
 
   useEffect(() => {
     setViewYear(Number(value.slice(0, 4)));
@@ -379,12 +516,24 @@ function MonthPicker({
 
   useEffect(() => {
     if (!open) return;
-    const closeOnOutsideClick = (event: MouseEvent) => {
+    const closeOnOutsidePointer = (event: PointerEvent) => {
       if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
     };
-    document.addEventListener('mousedown', closeOnOutsideClick);
-    return () => document.removeEventListener('mousedown', closeOnOutsideClick);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
   }, [open]);
+
+  const togglePicker = () => {
+    if (!open) setViewYear(Number(value.slice(0, 4)));
+    setOpen((current) => !current);
+  };
 
   const selectMonth = (monthNumber: number) => {
     onChange(`${viewYear}-${String(monthNumber).padStart(2, '0')}`);
@@ -392,23 +541,37 @@ function MonthPicker({
   };
 
   return (
-    <div ref={containerRef} className="relative">
+    <div
+      ref={containerRef}
+      className={isField ? 'relative w-full min-w-0 max-w-full' : 'relative'}
+    >
       <button
         type="button"
-        onClick={() => setOpen((current) => !current)}
-        className="min-w-[132px] rounded-[5px] px-2 py-1 text-center font-['Khand',sans-serif] text-[36px] font-light leading-none text-[#717182] transition-colors hover:bg-[#f2f2f2] sm:text-[48px]"
+        onClick={togglePicker}
+        className={isField
+          ? `${inputClass} box-border flex min-w-0 max-w-full items-center justify-between gap-3 text-left`
+          : "min-w-[132px] rounded-[5px] px-2 py-1 text-center font-['Khand',sans-serif] text-[36px] font-light leading-none text-[#717182] transition-colors hover:bg-[#f2f2f2] sm:text-[48px]"}
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label="対象年月を選択"
+        aria-label={`${ariaLabel}、現在${value.slice(0, 4)}年${selectedMonth}月`}
       >
-        {mode === 'yearly' ? value.slice(0, 4) : formatMonth(value)}
+        <span className="min-w-0 truncate">
+          {isField
+            ? `${value.slice(0, 4)}年${selectedMonth}月`
+            : mode === 'yearly' ? value.slice(0, 4) : formatMonth(value)}
+        </span>
+        {isField && <CalendarDays className="size-5 shrink-0 text-[#717182]" />}
       </button>
 
       {open && (
         <div
           role="dialog"
-          aria-label="対象年月を選択"
-          className="absolute left-1/2 top-full z-50 mt-2 w-[min(300px,calc(100vw-3rem))] -translate-x-1/2 rounded-[9px] border border-[#d1d5dc] bg-white px-4 pb-5 pt-4 shadow-[0_4px_12px_rgba(0,0,0,0.12)]"
+          aria-label={ariaLabel}
+          className={`absolute top-full z-50 mt-2 box-border rounded-[9px] border border-[#d1d5dc] bg-white px-4 pb-5 pt-4 shadow-[0_4px_12px_rgba(0,0,0,0.12)] ${
+            isField
+              ? 'left-0 w-full max-w-full'
+              : 'left-1/2 w-[min(300px,calc(100vw-3rem))] -translate-x-1/2'
+          }`}
         >
           <div className="flex items-center justify-between">
             <strong className="text-sm font-medium text-[#0a0a0a]">{viewYear}年</strong>
@@ -447,6 +610,7 @@ function MonthPicker({
                       : 'text-[#0a0a0a] hover:bg-[#f2f2f2]'
                   }`}
                   aria-label={`${viewYear}年${monthNumber}月`}
+                  aria-pressed={selected}
                 >
                   {monthNumber}月
                 </button>
@@ -496,6 +660,10 @@ function Dashboard({
 }) {
   const { totals } = data;
   const isYearly = mode === 'yearly';
+  const [selectedBreakdownGroupId, setSelectedBreakdownGroupId] = useState<string | null>(null);
+  useEffect(() => {
+    setSelectedBreakdownGroupId(null);
+  }, [data.targetMonth, mode]);
   const dashboardTotals = {
     incomeTotal: isYearly ? totals.yearlyIncomeTotal : totals.incomeTotal,
     fixedCostTotal: isYearly ? totals.yearlyFixedCostTotal : totals.fixedCostTotal,
@@ -509,13 +677,16 @@ function Dashboard({
     freeBudgetAfterSaving: isYearly
       ? totals.yearlyFreeBudgetAfterSaving
       : totals.freeBudgetAfterSaving,
+    fixedBudgetTotal: isYearly ? totals.yearlyFixedBudgetTotal : totals.fixedBudgetTotal,
+    fixedRemainingTotal: isYearly ? totals.yearlyFixedRemainingTotal : totals.fixedRemainingTotal,
+    fixedUsageRate: isYearly ? totals.yearlyFixedUsageRate : totals.fixedUsageRate,
     variableBudgetTotal: isYearly ? totals.yearlyBudgetTotal : totals.variableBudgetTotal,
     variableRemainingTotal: isYearly
       ? totals.yearlyVariableRemainingTotal
       : totals.variableRemainingTotal,
     variableUsageRate: isYearly ? totals.yearlyVariableUsageRate : totals.variableUsageRate,
   };
-  const summaryCards = [
+  const actualSummaryCards = [
     { label: '収入合計', value: dashboardTotals.incomeTotal, section: 'income' as const },
     { label: '固定費合計', value: dashboardTotals.fixedCostTotal, section: 'fixed' as const },
     {
@@ -523,14 +694,20 @@ function Dashboard({
       value: dashboardTotals.variableCostTotal,
       section: 'variableCost' as const,
     },
+  ];
+  const planSummaryCards = [
     {
-      label: '年間収入合計（見積）',
-      value: totals.estimatedAnnualIncomeTotal,
+      label: isYearly ? '年間収入合計（見積）' : '月間収入合計（見積）',
+      value: isYearly
+        ? totals.estimatedAnnualIncomeTotal
+        : totals.estimatedMonthlyIncomeTotal,
       section: 'annualIncome' as const,
     },
     {
-      label: '年間固定費（見積）',
-      value: totals.estimatedAnnualFixedCostTotal,
+      label: isYearly ? '年間固定費（見積）' : '月間固定費（見積）',
+      value: isYearly
+        ? totals.estimatedAnnualFixedCostTotal
+        : totals.estimatedMonthlyFixedCostTotal,
       section: 'annual' as const,
     },
     {
@@ -541,58 +718,6 @@ function Dashboard({
       section: 'annualIncome' as const,
     },
   ];
-  const categoryProgressItems = useMemo(() => {
-    const targetYear = data.targetMonth.slice(0, 4);
-    const categoryIds = new Set(data.categories.map((category) => category.id));
-    const actualByCategory = new Map<string, number>();
-
-    data.variableCosts
-      .filter((item) =>
-        isYearly
-          ? item.month.slice(0, 4) === targetYear
-          : item.month.slice(0, 7) === data.targetMonth,
-      )
-      .forEach((item) => {
-        const categoryId = categoryIds.has(item.categoryId) ? item.categoryId : '';
-        actualByCategory.set(categoryId, (actualByCategory.get(categoryId) ?? 0) + item.amount);
-      });
-
-    const items = data.variableCategoryBudgets.map((budget) => {
-      const category = data.categories.find((item) => item.id === budget.categoryId);
-      const categoryId = category?.id ?? '';
-      const budgetAmount = isYearly ? budget.budgetAmount * 12 : budget.budgetAmount;
-      const actualAmount = actualByCategory.get(categoryId) ?? 0;
-      return {
-        id: budget.id,
-        name: category?.name ?? '未分類',
-        budgetAmount,
-        actualAmount,
-        remainingAmount: budgetAmount - actualAmount,
-        usageRate: budgetAmount > 0 ? Math.round((actualAmount / budgetAmount) * 100) : 0,
-      };
-    });
-
-    const uncategorizedActual = actualByCategory.get('') ?? 0;
-    if (uncategorizedActual > 0) {
-      items.push({
-        id: 'uncategorized',
-        name: '未分類',
-        budgetAmount: 0,
-        actualAmount: uncategorizedActual,
-        remainingAmount: -uncategorizedActual,
-        usageRate: 0,
-      });
-    }
-
-    return items;
-  }, [
-    data.categories,
-    data.targetMonth,
-    data.variableCategoryBudgets,
-    data.variableCosts,
-    isYearly,
-  ]);
-
   return (
     <main className="mt-8 space-y-12">
       <section className="grid gap-6 md:grid-cols-2 md:gap-10">
@@ -611,7 +736,7 @@ function Dashboard({
         <div className="mb-5 flex items-end justify-between gap-4">
           <div>
             <p className="font-['Khand',sans-serif] text-sm tracking-[0.22em] text-[#717182]">
-              ACTUAL / ESTIMATE
+              ACTUAL
             </p>
             <h1 className="mt-1 text-xl font-light text-[#0a0a0a]">家計の集計内訳</h1>
           </div>
@@ -625,7 +750,37 @@ function Dashboard({
           </button>
         </div>
         <div className="grid gap-5 sm:grid-cols-2">
-          {summaryCards.map((card) => (
+          {actualSummaryCards.map((card) => (
+            <button
+              type="button"
+              key={card.label}
+              onClick={() => onOpenSection(card.section)}
+              className="group min-h-[142px] rounded-[5px] border-b border-r border-[#2c2c2c]/30 bg-white p-6 text-left transition-transform hover:-translate-y-0.5"
+            >
+              <span className="flex items-center justify-between text-sm font-light text-[#717182] sm:text-base">
+                {card.label}
+                <Edit3 className="size-4 opacity-0 transition-opacity group-hover:opacity-100" />
+              </span>
+              <strong className="mt-5 block text-right font-['Saira_Semi_Condensed','Khand',sans-serif] text-3xl font-medium text-[#0a0a0a] sm:text-4xl">
+                {formatCurrency(card.value)}
+              </strong>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <div className="mb-5">
+          <p className="font-['Khand',sans-serif] text-sm tracking-[0.22em] text-[#717182]">
+            PLAN / ESTIMATE
+          </p>
+          <h2 className="mt-1 text-xl font-light text-[#0a0a0a]">収支見積</h2>
+          <p className="mt-2 text-sm font-light leading-6 text-[#717182]">
+            年間収入・年間固定費の見積から算出した参考値です。
+          </p>
+        </div>
+        <div className="grid gap-5 sm:grid-cols-2">
+          {planSummaryCards.map((card) => (
             <button
               type="button"
               key={card.label}
@@ -649,26 +804,59 @@ function Dashboard({
           <p className="font-['Khand',sans-serif] text-sm tracking-[0.22em] text-[#717182]">
             VARIABLE BUDGET
           </p>
-          <h2 className="mt-1 text-xl font-light text-[#0a0a0a]">変動費予算の進捗</h2>
+          <h2 className="mt-1 text-xl font-light text-[#0a0a0a]">予算の進捗</h2>
+          <p className="mt-2 text-sm font-light leading-6 text-[#717182]">
+            設定した予算と実際の支出を比較します。
+          </p>
         </div>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <ProgressMetric label="予算合計" value={formatCurrency(dashboardTotals.variableBudgetTotal)} />
+          <ProgressMetric
+            label="予算合計"
+            value={dashboardTotals.variableBudgetTotal > 0
+              ? formatCurrency(dashboardTotals.variableBudgetTotal)
+              : '未設定'}
+          />
           <ProgressMetric label="実績合計" value={formatCurrency(dashboardTotals.variableCostTotal)} />
           <ProgressMetric
             label="残り合計"
-            value={formatCurrency(dashboardTotals.variableRemainingTotal)}
-            negative={dashboardTotals.variableRemainingTotal < 0}
+            value={dashboardTotals.variableBudgetTotal > 0
+              ? formatCurrency(dashboardTotals.variableRemainingTotal)
+              : '算出不可'}
+            negative={dashboardTotals.variableBudgetTotal > 0 && dashboardTotals.variableRemainingTotal < 0}
           />
-          <ProgressMetric label="使用率" value={`${dashboardTotals.variableUsageRate}%`} />
+          <ProgressMetric
+            label="使用率"
+            value={dashboardTotals.variableBudgetTotal > 0
+              ? `${dashboardTotals.variableUsageRate}%`
+              : '算出不可'}
+          />
         </div>
-        <VariableBudgetProgress
-          budgetTotal={dashboardTotals.variableBudgetTotal}
-          actualTotal={dashboardTotals.variableCostTotal}
-          remainingTotal={dashboardTotals.variableRemainingTotal}
-          usageRate={dashboardTotals.variableUsageRate}
-        />
-        <CategoryProgressList items={categoryProgressItems} />
+        <div className="mt-5 grid gap-5 lg:grid-cols-2">
+          <BudgetProgressCard
+            title="固定費予算"
+            englishLabel="FIXED BUDGET PROGRESS"
+            budgetTotal={dashboardTotals.fixedBudgetTotal}
+            actualTotal={dashboardTotals.fixedCostTotal}
+            remainingTotal={dashboardTotals.fixedRemainingTotal}
+            usageRate={dashboardTotals.fixedUsageRate}
+          />
+          <BudgetProgressCard
+            title="変動費予算"
+            englishLabel="VARIABLE BUDGET PROGRESS"
+            budgetTotal={dashboardTotals.variableBudgetTotal}
+            actualTotal={dashboardTotals.variableCostTotal}
+            remainingTotal={dashboardTotals.variableRemainingTotal}
+            usageRate={dashboardTotals.variableUsageRate}
+          />
+        </div>
       </section>
+
+      <VariableCostBreakdownCard
+        data={data}
+        mode={mode}
+        selectedGroupId={selectedBreakdownGroupId}
+        onSelectGroup={setSelectedBreakdownGroupId}
+      />
 
       <section className="rounded-[5px] border-b border-r border-[#2c2c2c]/30 p-6 sm:p-8">
         <div className="flex items-start gap-4">
@@ -679,7 +867,7 @@ function Dashboard({
             <h2 className="text-base font-normal">計算に含まれるもの</h2>
             <p className="mt-2 text-sm font-light leading-7 text-[#717182]">
               月額モードの実績は対象月、年額モードの実績は対象年で集計しています。
-              年額モードの固定費は現在の月額固定費を12倍して計算しています。
+              年額モードの予算は対象年に登録済みの各月予算を合計し、未登録月は0円として扱います。
             </p>
           </div>
         </div>
@@ -708,6 +896,144 @@ function ProgressMetric({
         {value}
       </p>
     </article>
+  );
+}
+
+const chartColors = ['#2c2c2c', '#717182', '#b42318', '#067647', '#175cd3', '#93370d', '#7f56d9', '#c11574'];
+
+function VariableCostBreakdownCard({
+  data,
+  mode,
+  selectedGroupId,
+  onSelectGroup,
+}: {
+  data: BudgetData;
+  mode: DashboardMode;
+  selectedGroupId: string | null;
+  onSelectGroup: (groupId: string | null) => void;
+}) {
+  const isYearly = mode === 'yearly';
+  const targetYear = data.targetMonth.slice(0, 4);
+  const categoryById = new Map(data.categories.map((category) => [category.id, category]));
+  const groupById = new Map(data.categoryGroups.map((group) => [group.id, group]));
+  const targetCosts = data.variableCosts.filter((item) =>
+    isYearly ? item.month.slice(0, 4) === targetYear : item.month.slice(0, 7) === data.targetMonth,
+  );
+  const groupTotals = new Map<string, number>();
+  const categoryTotals = new Map<string, number>();
+
+  targetCosts.forEach((cost) => {
+    const category = cost.categoryId ? categoryById.get(cost.categoryId) : undefined;
+    const groupId = cost.categoryGroupId || category?.groupId || '';
+    groupTotals.set(groupId, (groupTotals.get(groupId) ?? 0) + cost.amount);
+    if (selectedGroupId !== null && groupId === selectedGroupId) {
+      const categoryId = category && category.groupId === selectedGroupId ? category.id : '';
+      categoryTotals.set(categoryId, (categoryTotals.get(categoryId) ?? 0) + cost.amount);
+    }
+  });
+
+  const total = Array.from(groupTotals.values()).reduce((sum, amount) => sum + amount, 0);
+  const selectedGroupTotal = selectedGroupId ? groupTotals.get(selectedGroupId) ?? 0 : total;
+  const sourceEntries = selectedGroupId
+    ? Array.from(categoryTotals.entries())
+    : Array.from(groupTotals.entries());
+  const items = sourceEntries
+    .map(([id, amount], index): BreakdownItem => {
+      const category = selectedGroupId ? categoryById.get(id) : undefined;
+      const group = selectedGroupId ? undefined : groupById.get(id);
+      const baseTotal = selectedGroupId ? selectedGroupTotal : total;
+      return {
+        id: id || 'uncategorized',
+        name: category?.name ?? group?.name ?? (id ? '削除済みカテゴリ' : '未分類'),
+        amount,
+        rate: baseTotal > 0 ? Math.round((amount / baseTotal) * 1000) / 10 : 0,
+        color: category?.color ?? group?.color ?? chartColors[index % chartColors.length],
+      };
+    })
+    .filter((item) => item.amount > 0)
+    .sort((a, b) => b.amount - a.amount);
+  const selectedGroupName = selectedGroupId ? groupById.get(selectedGroupId)?.name ?? '削除済みカテゴリ' : '';
+  const title = selectedGroupId ? `${selectedGroupName}の内訳` : '変動費の内訳';
+
+  return (
+    <section className="rounded-[5px] border-b border-r border-[#2c2c2c]/30 p-6 sm:p-8">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="font-['Khand',sans-serif] text-sm tracking-[0.22em] text-[#717182]">
+            VARIABLE BREAKDOWN
+          </p>
+          <h2 className="mt-1 text-xl font-light text-[#0a0a0a]">{title}</h2>
+        </div>
+        {selectedGroupId && (
+          <button
+            type="button"
+            onClick={() => onSelectGroup(null)}
+            className="min-h-11 rounded-[5px] border border-[#2c2c2c]/30 px-4 text-sm text-[#2c2c2c] hover:bg-[#f7f7f7]"
+          >
+            ＜ 変動費全体へ戻る
+          </button>
+        )}
+      </div>
+
+      {total <= 0 || items.length === 0 ? (
+        <div className="rounded-[5px] border border-dashed border-[#717182]/40 px-5 py-10 text-center text-sm font-light text-[#717182]">
+          対象期間の変動費実績がないため、内訳グラフは表示していません。
+        </div>
+      ) : (
+        <div className="grid gap-6 lg:grid-cols-[minmax(220px,320px)_1fr]">
+          <div className="h-64 w-full" aria-label={`${title}のドーナツグラフ`}>
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={items}
+                  dataKey="amount"
+                  nameKey="name"
+                  innerRadius="58%"
+                  outerRadius="86%"
+                  paddingAngle={2}
+                  onClick={(entry) => {
+                    const item = entry as BreakdownItem;
+                    if (!selectedGroupId && item.id !== 'uncategorized') onSelectGroup(item.id);
+                  }}
+                >
+                  {items.map((item) => (
+                    <Cell key={item.id} fill={item.color} />
+                  ))}
+                </Pie>
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          <div>
+            <p className="mb-4 text-sm font-light text-[#717182]">
+              合計：{formatCurrency(selectedGroupId ? selectedGroupTotal : total)}
+            </p>
+            <div className="space-y-2">
+              {items.map((item) => (
+                <button
+                  type="button"
+                  key={item.id}
+                  onClick={() => {
+                    if (!selectedGroupId && item.id !== 'uncategorized') onSelectGroup(item.id);
+                  }}
+                  disabled={selectedGroupId !== null || item.id === 'uncategorized'}
+                  className="grid min-h-12 w-full grid-cols-[auto_1fr_auto] items-center gap-3 rounded-[5px] px-2 py-2 text-left hover:bg-[#f7f7f7] disabled:hover:bg-transparent"
+                >
+                  <span
+                    className="size-3 rounded-full"
+                    style={{ backgroundColor: item.color }}
+                    aria-hidden="true"
+                  />
+                  <span className="min-w-0 truncate text-sm text-[#0a0a0a]">{item.name}</span>
+                  <span className="text-right text-sm font-light text-[#717182]">
+                    {formatCurrency(item.amount)} / {item.rate.toFixed(1)}%
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -741,113 +1067,79 @@ function ProgressBar({
   );
 }
 
-function VariableBudgetProgress({
+function BudgetProgressCard({
+  title,
+  englishLabel,
   budgetTotal,
   actualTotal,
   remainingTotal,
   usageRate,
 }: {
+  title: string;
+  englishLabel: string;
   budgetTotal: number;
   actualTotal: number;
   remainingTotal: number;
   usageRate: number;
 }) {
-  const overBudget = usageRate > 100;
+  const unsetBudget = budgetTotal <= 0;
+  const overBudget = !unsetBudget && usageRate > 100;
+  const overAmount = actualTotal - budgetTotal;
 
   return (
-    <article className="mt-5 rounded-[5px] border-b border-r border-[#2c2c2c]/30 bg-white p-5 sm:p-6">
+    <article className="rounded-[5px] border-b border-r border-[#2c2c2c]/30 bg-white p-5 sm:p-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="font-['Khand',sans-serif] text-sm tracking-[0.18em] text-[#717182]">
-            VARIABLE BUDGET PROGRESS
+            {englishLabel}
           </p>
-          <h3 className="mt-1 text-lg font-light text-[#0a0a0a]">変動費予算の使用率</h3>
+          <h3 className="mt-1 text-lg font-light text-[#0a0a0a]">{title}の使用率</h3>
         </div>
         <div className="flex items-center gap-3">
-          {overBudget && (
+          {unsetBudget ? (
+            <span className="rounded-[5px] bg-[#f2f2f2] px-3 py-1 text-sm text-[#717182]">
+              予算未設定
+            </span>
+          ) : overBudget && (
             <span className="rounded-[5px] bg-[#fef3f2] px-3 py-1 text-sm text-[#b42318]">
               予算オーバー
             </span>
           )}
-          <strong className={`font-['Khand',sans-serif] text-3xl font-medium ${
+          <strong className={`font-['Khand',sans-serif] font-medium ${
+            unsetBudget ? 'text-xl' : 'text-3xl'
+          } ${
             overBudget ? 'text-[#b42318]' : 'text-[#0a0a0a]'
           }`}
           >
-            {usageRate}%
+            {unsetBudget ? '算出不可' : `${usageRate}%`}
           </strong>
         </div>
       </div>
-      <div className="mt-5 max-w-3xl">
-        <ProgressBar usageRate={usageRate} heightClass="h-3" />
-      </div>
-      <div className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
-        <ComparisonValue label="予算" value={budgetTotal} />
-        <ComparisonValue label="実績" value={actualTotal} />
-        <ComparisonValue label="残り" value={remainingTotal} negative={remainingTotal < 0} />
-      </div>
-    </article>
-  );
-}
-
-function CategoryProgressList({ items }: { items: CategoryProgressItem[] }) {
-  return (
-    <section className="mt-6">
-      <div className="mb-4 flex items-end justify-between gap-4">
-        <div>
-          <p className="font-['Khand',sans-serif] text-sm tracking-[0.18em] text-[#717182]">
-            CATEGORY PROGRESS
-          </p>
-          <h3 className="mt-1 text-lg font-light text-[#0a0a0a]">カテゴリ別の進捗</h3>
-        </div>
-        <span className="text-sm text-[#717182]">{items.length}件</span>
-      </div>
-      {items.length === 0 ? (
-        <div className="rounded-[5px] border border-dashed border-[#717182]/40 px-5 py-8 text-center text-sm font-light text-[#717182]">
-          表示できるカテゴリ別進捗はまだありません。
-        </div>
-      ) : (
-        <div className="grid gap-4 md:grid-cols-2">
-          {items.map((item) => {
-            const overBudget = item.usageRate > 100;
-            return (
-              <article
-                key={item.id}
-                className="rounded-[5px] border-b border-r border-[#2c2c2c]/25 bg-white p-5"
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <h4 className="min-w-0 truncate text-base font-normal text-[#0a0a0a]">
-                    {item.name}
-                  </h4>
-                  <div className="shrink-0 text-right">
-                    {overBudget && (
-                      <span className="mb-1 block text-xs text-[#b42318]">予算オーバー</span>
-                    )}
-                    <strong className={`font-['Khand',sans-serif] text-xl font-medium ${
-                      overBudget ? 'text-[#b42318]' : 'text-[#0a0a0a]'
-                    }`}
-                    >
-                      {item.usageRate}%
-                    </strong>
-                  </div>
-                </div>
-                <div className="mt-4">
-                  <ProgressBar usageRate={item.usageRate} />
-                </div>
-                <div className="mt-4 grid gap-2 text-sm sm:grid-cols-3">
-                  <ComparisonValue label="予算" value={item.budgetAmount} />
-                  <ComparisonValue label="実績" value={item.actualAmount} />
-                  <ComparisonValue
-                    label="残り"
-                    value={item.remainingAmount}
-                    negative={item.remainingAmount < 0}
-                  />
-                </div>
-              </article>
-            );
-          })}
+      {!unsetBudget && (
+        <div className="mt-5 max-w-3xl">
+          <ProgressBar usageRate={usageRate} heightClass="h-3" />
         </div>
       )}
-    </section>
+      <div className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
+        <ComparisonValue label="予算" value={unsetBudget ? '未設定' : budgetTotal} />
+        <ComparisonValue label="実績" value={actualTotal} />
+        <ComparisonValue
+          label="残り"
+          value={unsetBudget ? '算出不可' : remainingTotal}
+          negative={!unsetBudget && remainingTotal < 0}
+        />
+      </div>
+      {unsetBudget && (
+        <p className="mt-3 text-sm font-light leading-6 text-[#717182]">
+          月間予算を登録すると残額と使用率を確認できます。
+        </p>
+      )}
+      {overBudget && (
+        <p className="mt-3 text-sm text-[#b42318]">
+          超過額：{formatCurrency(overAmount)}
+        </p>
+      )}
+    </article>
   );
 }
 
@@ -889,6 +1181,7 @@ function Management({
 }) {
   const [section, setSection] = useState<BudgetSection>(initialSection);
   const [editingItem, setEditingItem] = useState<EditableItem | null>(null);
+  const [message, setMessage] = useState<Message | null>(null);
 
   useEffect(() => {
     setEditingItem(null);
@@ -897,6 +1190,7 @@ function Management({
   const changeSection = (nextSection: BudgetSection) => {
     setSection(nextSection);
     setEditingItem(null);
+    setMessage(null);
   };
 
   return (
@@ -930,6 +1224,8 @@ function Management({
             data={data}
             editingItem={editingItem}
             setEditingItem={setEditingItem}
+            message={message}
+            setMessage={setMessage}
           />
         )}
       </div>
@@ -942,11 +1238,15 @@ function ItemManager({
   data,
   editingItem,
   setEditingItem,
+  message,
+  setMessage,
 }: {
   section: Exclude<BudgetSection, 'saving'>;
   data: BudgetData;
   editingItem: EditableItem | null;
   setEditingItem: (item: EditableItem | null) => void;
+  message: Message | null;
+  setMessage: (message: Message | null) => void;
 }) {
   const items = useMemo<EditableItem[]>(() => {
     if (section === 'income') {
@@ -960,18 +1260,20 @@ function ItemManager({
         (item) => item.month.slice(0, 7) === data.targetMonth,
       );
     }
+    if (section === 'categoryGroup') return data.categoryGroups;
     if (section === 'category') return data.categories;
-    if (section === 'variable') return data.variableCategoryBudgets;
+    if (section === 'monthlyBudget') return data.monthlyBudgets;
     if (section === 'annualIncome') return data.annualIncomes;
     return data.annualCosts;
   }, [
     data.annualCosts,
     data.annualIncomes,
+    data.categoryGroups,
     data.categories,
     data.fixedCosts,
     data.incomes,
+    data.monthlyBudgets,
     data.targetMonth,
-    data.variableCategoryBudgets,
     data.variableCosts,
     section,
   ]);
@@ -979,7 +1281,7 @@ function ItemManager({
   const removeItem = (item: EditableItem) => {
     const itemName = 'name' in item ? item.name : data.categories.find((category) => (
       'categoryId' in item && category.id === item.categoryId
-    ))?.name ?? '未分類';
+    ))?.name ?? ('yearMonth' in item ? `${formatMonth(item.yearMonth)}の予算` : '未分類');
     if (!window.confirm(`「${itemName}」を削除しますか？`)) return;
     if (section === 'income') {
       data.setIncomes((current) => current.filter((x) => x.id !== item.id));
@@ -990,19 +1292,30 @@ function ItemManager({
     if (section === 'variableCost') {
       data.setVariableCosts((current) => current.filter((x) => x.id !== item.id));
     }
+    if (section === 'categoryGroup') {
+      const childCategories = data.categories.some((category) => category.groupId === item.id);
+      const usedByCost = data.variableCosts.some((cost) => cost.categoryGroupId === item.id);
+      if (childCategories || usedByCost) {
+        setMessage({
+          type: 'error',
+          text: childCategories
+            ? '配下カテゴリがあるグループカテゴリは削除できません。'
+            : '実績データから参照されているグループカテゴリは削除できません。',
+        });
+        return;
+      }
+      data.setCategoryGroups((current) => current.filter((x) => x.id !== item.id));
+    }
     if (section === 'category') {
       const usedByCost = data.variableCosts.some((cost) => cost.categoryId === item.id);
-      const usedByBudget = data.variableCategoryBudgets.some(
-        (budget) => budget.categoryId === item.id,
-      );
-      if (usedByCost || usedByBudget) {
-        window.alert('使用中または予算ありのカテゴリは削除できません。');
+      if (usedByCost) {
+        setMessage({ type: 'error', text: '使用中のカテゴリは削除できません。' });
         return;
       }
       data.setCategories((current) => current.filter((x) => x.id !== item.id));
     }
-    if (section === 'variable') {
-      data.setVariableCategoryBudgets((current) => current.filter((x) => x.id !== item.id));
+    if (section === 'monthlyBudget') {
+      data.setMonthlyBudgets((current) => current.filter((x) => x.yearMonth !== item.yearMonth));
     }
     if (section === 'annualIncome') {
       data.setAnnualIncomes((current) => current.filter((x) => x.id !== item.id));
@@ -1010,21 +1323,49 @@ function ItemManager({
     if (section === 'annual') {
       data.setAnnualCosts((current) => current.filter((x) => x.id !== item.id));
     }
-    if (editingItem?.id === item.id) setEditingItem(null);
+    if (
+      editingItem
+      && (('id' in editingItem && 'id' in item && editingItem.id === item.id)
+        || ('yearMonth' in editingItem && 'yearMonth' in item && editingItem.yearMonth === item.yearMonth))
+    ) {
+      setEditingItem(null);
+    }
+    setMessage({ type: 'success', text: '削除しました。' });
   };
 
   return (
     <div className="space-y-10">
       <div className="grid items-start gap-10 lg:grid-cols-[minmax(300px,390px)_1fr]">
         <ItemForm
-          key={editingItem?.id ?? `new-${data.targetMonth}`}
+          key={
+            editingItem && 'id' in editingItem
+              ? editingItem.id
+              : editingItem && 'yearMonth' in editingItem
+                ? editingItem.yearMonth
+                : `new-${data.targetMonth}`
+          }
           section={section}
           data={data}
           editingItem={editingItem}
-          onFinish={() => setEditingItem(null)}
+          onFinish={(nextMessage) => {
+            setEditingItem(null);
+            setMessage(nextMessage ?? null);
+          }}
         />
 
         <section>
+        {message && (
+          <p
+            role={message.type === 'error' ? 'alert' : 'status'}
+            className={`mb-4 rounded-[5px] px-4 py-3 text-sm ${
+              message.type === 'error'
+                ? 'bg-[#fef3f2] text-[#b42318]'
+                : 'bg-[#ecfdf3] text-[#067647]'
+            }`}
+          >
+            {message.text}
+          </p>
+        )}
         <div className="mb-4 flex items-center justify-between">
           <div>
             <p className="font-['Khand',sans-serif] text-sm tracking-[0.2em] text-[#717182]">
@@ -1046,7 +1387,7 @@ function ItemManager({
           <div className="space-y-3">
             {items.map((item) => (
               <ItemRow
-                key={item.id}
+                key={'id' in item ? item.id : item.yearMonth}
                 item={item}
                 categoryName={
                   'categoryId' in item
@@ -1054,6 +1395,13 @@ function ItemManager({
                         (category) => category.id === item.categoryId,
                       )?.name
                     : undefined
+                }
+                groupName={
+                  'groupId' in item
+                    ? data.categoryGroups.find((group) => group.id === item.groupId)?.name
+                    : 'categoryGroupId' in item
+                      ? data.categoryGroups.find((group) => group.id === item.categoryGroupId)?.name
+                      : undefined
                 }
                 onEdit={() => setEditingItem(item)}
                 onDelete={() => removeItem(item)}
@@ -1063,63 +1411,7 @@ function ItemManager({
         )}
         </section>
       </div>
-      {section === 'variable' && <CategoryBudgetComparison data={data} />}
     </div>
-  );
-}
-
-function CategoryBudgetComparison({ data }: { data: BudgetData }) {
-  return (
-    <section>
-      <div className="mb-4">
-        <p className="font-['Khand',sans-serif] text-sm tracking-[0.2em] text-[#717182]">
-          BUDGET VS ACTUAL
-        </p>
-        <h2 className="mt-1 text-lg font-light">
-          {formatMonth(data.targetMonth)} カテゴリ別の予算進捗
-        </h2>
-      </div>
-      {data.categoryComparisons.length === 0 ? (
-        <div className="rounded-[5px] border border-dashed border-[#717182]/40 px-5 py-10 text-center text-sm font-light text-[#717182]">
-          比較できるカテゴリまたは実績がありません。
-        </div>
-      ) : (
-        <div className="grid gap-4 md:grid-cols-2">
-          {data.categoryComparisons.map((comparison) => (
-            <article
-              key={comparison.id || 'uncategorized'}
-              className="rounded-[5px] border-b border-r border-[#2c2c2c]/25 p-5"
-            >
-              <div className="flex items-start justify-between gap-4">
-                <h3 className="min-w-0 truncate text-base font-normal">
-                  {comparison.name}
-                </h3>
-                <strong className="shrink-0 font-['Khand',sans-serif] text-xl font-medium">
-                  {comparison.usageRate}%
-                </strong>
-              </div>
-              <div className="mt-4 grid gap-2 text-sm sm:grid-cols-3">
-                <ComparisonValue label="予算" value={comparison.budgetAmount} />
-                <ComparisonValue label="実績" value={comparison.actualAmount} />
-                <ComparisonValue
-                  label="残り"
-                  value={comparison.remainingAmount}
-                  negative={comparison.remainingAmount < 0}
-                />
-              </div>
-              <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-[#f2f2f2]">
-                <div
-                  className={`h-full rounded-full ${
-                    comparison.usageRate > 100 ? 'bg-[#b42318]' : 'bg-[#2c2c2c]'
-                  }`}
-                  style={{ width: `${Math.min(Math.max(comparison.usageRate, 0), 100)}%` }}
-                />
-              </div>
-            </article>
-          ))}
-        </div>
-      )}
-    </section>
   );
 }
 
@@ -1129,7 +1421,7 @@ function ComparisonValue({
   negative = false,
 }: {
   label: string;
-  value: number;
+  value: number | string;
   negative?: boolean;
 }) {
   return (
@@ -1140,7 +1432,7 @@ function ComparisonValue({
           negative ? 'text-[#b42318]' : 'text-[#0a0a0a]'
         }`}
       >
-        {formatCurrency(value)}
+        {typeof value === 'number' ? formatCurrency(value) : value}
       </p>
     </div>
   );
@@ -1155,26 +1447,57 @@ function ItemForm({
   section: Exclude<BudgetSection, 'saving'>;
   data: BudgetData;
   editingItem: EditableItem | null;
-  onFinish: () => void;
+  onFinish: (message?: Message) => void;
 }) {
-  const initialAmount = editingItem && section !== 'category'
+  const initialAmount = editingItem && section !== 'category' && section !== 'categoryGroup' && section !== 'monthlyBudget'
     ? 'budgetAmount' in editingItem
       ? editingItem.budgetAmount
       : editingItem.amount
     : '';
   const [name, setName] = useState(editingItem && 'name' in editingItem ? editingItem.name : '');
   const [amount, setAmount] = useState(formatAmountInput(initialAmount));
-  const [memo, setMemo] = useState(editingItem?.memo ?? '');
+  const [memo, setMemo] = useState(editingItem && 'memo' in editingItem ? editingItem.memo ?? '' : '');
+  const [color, setColor] = useState(
+    editingItem && 'color' in editingItem && editingItem.color ? editingItem.color : '#717182',
+  );
+  const [icon, setIcon] = useState(
+    editingItem && 'icon' in editingItem && editingItem.icon ? editingItem.icon : '',
+  );
   const [month, setMonth] = useState(
     editingItem && 'month' in editingItem
       ? editingItem.month
+      : editingItem && 'yearMonth' in editingItem
+        ? `${editingItem.yearMonth}-01`
       : getInitialDate(data.targetMonth, data.currentMonth),
+  );
+  const [categoryGroupId, setCategoryGroupId] = useState(
+    editingItem
+      && 'groupId' in editingItem
+      && data.categoryGroups.some((group) => group.id === editingItem.groupId)
+      ? editingItem.groupId
+      : editingItem
+        && 'categoryGroupId' in editingItem
+        && editingItem.categoryGroupId
+        && data.categoryGroups.some((group) => group.id === editingItem.categoryGroupId)
+        ? editingItem.categoryGroupId
+        : '',
   );
   const [categoryId, setCategoryId] = useState(
     editingItem
       && 'categoryId' in editingItem
+      && editingItem.categoryId
       && data.categories.some((category) => category.id === editingItem.categoryId)
       ? editingItem.categoryId
+      : '',
+  );
+  const [fixedBudgetAmount, setFixedBudgetAmount] = useState(
+    editingItem && 'fixedExpenseBudget' in editingItem
+      ? formatAmountInput(editingItem.fixedExpenseBudget)
+      : '',
+  );
+  const [variableBudgetAmount, setVariableBudgetAmount] = useState(
+    editingItem && 'variableExpenseBudget' in editingItem
+      ? formatAmountInput(editingItem.variableExpenseBudget)
       : '',
   );
   const [error, setError] = useState('');
@@ -1182,15 +1505,26 @@ function ItemForm({
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const parsedAmount = parseAmountInput(amount);
-    if (section !== 'variable' && !name.trim()) {
+    const parsedFixedBudget = parseAmountInput(fixedBudgetAmount);
+    const parsedVariableBudget = parseAmountInput(variableBudgetAmount);
+    if (section !== 'monthlyBudget' && !name.trim()) {
       setError('名称を入力してください。');
       return;
     }
-    if (section === 'variable' && !categoryId) {
-      setError('カテゴリを選択してください。');
+    if (section === 'category' && !categoryGroupId) {
+      setError('グループカテゴリを選択してください。');
       return;
     }
-    if (section !== 'category' && (!Number.isFinite(parsedAmount) || parsedAmount <= 0)) {
+    if (section === 'variableCost' && categoryGroupId && !categoryId) {
+      setError('カテゴリを選択するか、グループカテゴリを未選択にしてください。');
+      return;
+    }
+    if (
+      section !== 'category'
+      && section !== 'categoryGroup'
+      && section !== 'monthlyBudget'
+      && (!Number.isFinite(parsedAmount) || parsedAmount <= 0)
+    ) {
       setError('金額は1円以上で入力してください。');
       return;
     }
@@ -1205,28 +1539,55 @@ function ItemForm({
       const duplicate = data.categories.some(
         (category) =>
           category.id !== editingItem?.id
+          && category.groupId === categoryGroupId
           && category.name.trim().toLowerCase() === name.trim().toLowerCase(),
       );
       if (duplicate) {
-        setError('同じ名前のカテゴリは登録できません。');
+        setError('同じグループ内に同じ名前のカテゴリは登録できません。');
         return;
       }
     }
-    if (section === 'variable') {
-      const duplicate = data.variableCategoryBudgets.some(
-        (budget) => budget.id !== editingItem?.id && budget.categoryId === categoryId,
+    if (section === 'categoryGroup') {
+      const duplicate = data.categoryGroups.some(
+        (group) =>
+          group.id !== editingItem?.id
+          && group.name.trim().toLowerCase() === name.trim().toLowerCase(),
       );
       if (duplicate) {
-        setError('選択したカテゴリの予算はすでに登録されています。');
+        setError('同じ名前のグループカテゴリは登録できません。');
+        return;
+      }
+    }
+    if (section === 'monthlyBudget') {
+      const yearMonth = month.slice(0, 7);
+      const editingYearMonth = editingItem && 'yearMonth' in editingItem
+        ? editingItem.yearMonth
+        : '';
+      const duplicate = data.monthlyBudgets.some(
+        (budget) => budget.yearMonth !== editingYearMonth
+          && budget.yearMonth === yearMonth,
+      );
+      if (duplicate) {
+        const [year, monthNumber] = yearMonth.split('-');
+        setError(`${year}年${Number(monthNumber)}月の月間予算はすでに登録されています。`);
+        return;
+      }
+      if (
+        !Number.isFinite(parsedFixedBudget)
+        || !Number.isFinite(parsedVariableBudget)
+        || parsedFixedBudget < 0
+        || parsedVariableBudget < 0
+      ) {
+        setError('予算金額は0円以上で入力してください。');
         return;
       }
     }
 
     const now = new Date().toISOString();
     const base = {
-      id: editingItem?.id ?? createId(),
+      id: editingItem && 'id' in editingItem ? editingItem.id : createId(),
       memo: memo.trim() || undefined,
-      createdAt: editingItem?.createdAt ?? now,
+      createdAt: editingItem && 'createdAt' in editingItem ? editingItem.createdAt : now,
       updatedAt: now,
     };
 
@@ -1238,21 +1599,52 @@ function ItemForm({
       );
     } else if (section === 'variableCost') {
       data.setVariableCosts((current) =>
-        upsert(current, { ...base, name: name.trim(), amount: parsedAmount, month, categoryId }),
+        upsert(current, {
+          ...base,
+          name: name.trim(),
+          amount: parsedAmount,
+          month,
+          categoryGroupId: categoryGroupId || undefined,
+          categoryId: categoryId || undefined,
+        }),
+      );
+    } else if (section === 'categoryGroup') {
+      data.setCategoryGroups((current) =>
+        upsert(current, {
+          ...base,
+          name: name.trim(),
+          color,
+          icon: icon.trim() || undefined,
+        }),
       );
     } else if (section === 'category') {
       data.setCategories((current) =>
         upsert(current, {
           ...base,
+          groupId: categoryGroupId,
           name: name.trim(),
-          color: editingItem && 'color' in editingItem ? editingItem.color : undefined,
-          icon: editingItem && 'icon' in editingItem ? editingItem.icon : undefined,
+          color,
+          icon: icon.trim() || undefined,
         }),
       );
-    } else if (section === 'variable') {
-      data.setVariableCategoryBudgets((current) =>
-        upsert(current, { ...base, categoryId, budgetAmount: parsedAmount }),
-      );
+    } else if (section === 'monthlyBudget') {
+      const yearMonth = month.slice(0, 7);
+      data.setMonthlyBudgets((current) => {
+        const editingYearMonth = editingItem && 'yearMonth' in editingItem
+          ? editingItem.yearMonth
+          : '';
+        const nextBudget = {
+          yearMonth,
+          fixedExpenseBudget: parsedFixedBudget,
+          variableExpenseBudget: parsedVariableBudget,
+          createdAt: editingItem && 'createdAt' in editingItem ? editingItem.createdAt : now,
+          updatedAt: now,
+        };
+        const withoutEditedBudget = editingYearMonth
+          ? current.filter((item) => item.yearMonth !== editingYearMonth)
+          : current;
+        return [nextBudget, ...withoutEditedBudget];
+      });
     } else if (section === 'annualIncome') {
       data.setAnnualIncomes((current) => upsert(current, { ...base, name: name.trim(), amount: parsedAmount }));
     } else {
@@ -1262,10 +1654,20 @@ function ItemForm({
     setName('');
     setAmount('');
     setMemo('');
+    setColor('#717182');
+    setIcon('');
     setMonth(getInitialDate(data.targetMonth, data.currentMonth));
+    setCategoryGroupId('');
     setCategoryId('');
+    setFixedBudgetAmount('');
+    setVariableBudgetAmount('');
     setError('');
-    onFinish();
+    onFinish({
+      type: 'success',
+      text: section === 'monthlyBudget'
+        ? `月間予算を${editingItem ? '更新' : '登録'}しました。ホームの「予算の進捗」に反映されます。`
+        : '保存しました。',
+    });
   };
 
   return (
@@ -1278,6 +1680,12 @@ function ItemForm({
           <h2 className="mt-1 text-lg font-light">
             {SECTION_LABELS[section]}を{editingItem ? '編集' : '登録'}
           </h2>
+          {section === 'monthlyBudget' && (
+            <p className="mt-2 text-sm font-light leading-6 text-[#717182]">
+              月ごとの固定費・変動費の支出上限を設定します。<br />
+              登録した金額は、ホームの「予算の進捗」に反映されます。
+            </p>
+          )}
         </div>
         {editingItem && (
           <button
@@ -1292,7 +1700,7 @@ function ItemForm({
       </div>
 
       <form className="space-y-5" onSubmit={submit}>
-        {section !== 'variable' && (
+        {section !== 'monthlyBudget' && (
           <FormField label={nameLabel(section)}>
             <input
               value={name}
@@ -1304,43 +1712,103 @@ function ItemForm({
           </FormField>
         )}
 
-        {section !== 'category' && (
+        {section === 'monthlyBudget' && (
+          <div className="min-w-0 max-w-full">
+            <span className="mb-2 block text-sm font-light text-[#364153]">対象年月</span>
+            <MonthPicker
+              value={month.slice(0, 7)}
+              onChange={(yearMonth) => setMonth(`${yearMonth}-01`)}
+              mode="monthly"
+              variant="field"
+              ariaLabel="月間予算の対象年月を選択"
+            />
+          </div>
+        )}
+
+        {section === 'monthlyBudget' && (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <FormField label="固定費予算">
+              <AmountInput value={fixedBudgetAmount} onChange={setFixedBudgetAmount} />
+            </FormField>
+            <FormField label="変動費予算">
+              <AmountInput value={variableBudgetAmount} onChange={setVariableBudgetAmount} />
+            </FormField>
+          </div>
+        )}
+
+        {section !== 'category' && section !== 'categoryGroup' && section !== 'monthlyBudget' && (
           <FormField
             label={
-              section === 'variable'
-                ? '予算金額'
-                : section === 'annual' || section === 'annualIncome'
+              section === 'annual' || section === 'annualIncome'
                   ? '年間金額'
                   : '金額'
             }
           >
-            <div className="relative">
-              <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[#717182]">
-                ¥
-              </span>
-              <input
-                type="text"
-                inputMode="numeric"
-                value={amount}
-                onChange={(event) => setAmount(sanitizeAmountInput(event.target.value))}
-                onFocus={() => setAmount((current) => sanitizeAmountInput(current))}
-                onBlur={() => setAmount((current) => formatAmountInput(current))}
-                className={`${inputClass} pl-9 text-right font-['Khand',sans-serif] text-lg`}
-                placeholder="0"
-              />
-            </div>
+            <AmountInput value={amount} onChange={setAmount} />
           </FormField>
         )}
 
-        {(section === 'variableCost' || section === 'variable') && (
-          <FormField label={section === 'variable' ? 'カテゴリ' : 'カテゴリ（任意）'}>
+        {(section === 'category' || section === 'variableCost') && (
+          <FormField label={section === 'category' ? 'グループカテゴリ' : 'グループカテゴリ（任意）'}>
+            <select
+              value={categoryGroupId}
+              onChange={(event) => {
+                setCategoryGroupId(event.target.value);
+                setCategoryId('');
+              }}
+              className={inputClass}
+            >
+              <option value="">{section === 'category' ? 'グループカテゴリを選択' : '未分類'}</option>
+              {data.categoryGroups.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.name}
+                </option>
+              ))}
+            </select>
+          </FormField>
+        )}
+
+        {(section === 'categoryGroup' || section === 'category') && (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <FormField label="色">
+              <div className="flex items-center gap-3">
+                <input
+                  type="color"
+                  value={color}
+                  onChange={(event) => setColor(event.target.value)}
+                  className="h-12 w-14 rounded-[5px] border border-[#717182]/45 bg-white p-1"
+                  aria-label="色を選択"
+                />
+                <input
+                  value={color}
+                  onChange={(event) => setColor(event.target.value)}
+                  className={inputClass}
+                  placeholder="#717182"
+                />
+              </div>
+            </FormField>
+            <FormField label="アイコン（任意）">
+              <input
+                value={icon}
+                onChange={(event) => setIcon(event.target.value)}
+                className={inputClass}
+                placeholder="例：food"
+                autoComplete="off"
+              />
+            </FormField>
+          </div>
+        )}
+
+        {section === 'variableCost' && (
+          <FormField label="カテゴリ（任意）">
             <select
               value={categoryId}
               onChange={(event) => setCategoryId(event.target.value)}
               className={inputClass}
+              disabled={!categoryGroupId}
             >
-              <option value="">{section === 'variable' ? 'カテゴリを選択' : '未分類'}</option>
-              {data.categories.map((category) => (
+              <option value="">{categoryGroupId ? '未分類' : 'グループカテゴリを先に選択'}</option>
+              {data.categories.filter((category) => category.groupId === categoryGroupId).map((category) => (
                 <option key={category.id} value={category.id}>
                   {category.name}
                 </option>
@@ -1355,14 +1823,16 @@ function ItemForm({
           </FormField>
         )}
 
-        <FormField label="メモ（任意）">
-          <textarea
-            value={memo}
-            onChange={(event) => setMemo(event.target.value)}
-            className={`${inputClass} min-h-24 resize-y`}
-            placeholder="補足があれば入力"
-          />
-        </FormField>
+        {section !== 'categoryGroup' && section !== 'monthlyBudget' && (
+          <FormField label="メモ（任意）">
+            <textarea
+              value={memo}
+              onChange={(event) => setMemo(event.target.value)}
+              className={`${inputClass} min-h-24 resize-y`}
+              placeholder="補足があれば入力"
+            />
+          </FormField>
+        )}
 
         {error && (
           <p className="rounded-[5px] bg-[#fef3f2] px-4 py-3 text-sm text-[#b42318]" role="alert">
@@ -1385,16 +1855,22 @@ function ItemForm({
 function ItemRow({
   item,
   categoryName,
+  groupName,
   onEdit,
   onDelete,
 }: {
   item: EditableItem;
   categoryName?: string;
+  groupName?: string;
   onEdit: () => void;
   onDelete: () => void;
 }) {
   const amount = 'budgetAmount' in item ? item.budgetAmount : 'amount' in item ? item.amount : null;
-  const itemName = 'name' in item ? item.name : categoryName ?? '未分類';
+  const itemName = 'name' in item
+    ? item.name
+    : 'yearMonth' in item
+      ? `${formatMonth(item.yearMonth)}の予算`
+      : categoryName ?? '未分類';
 
   return (
     <article className="rounded-[5px] border-b border-r border-[#2c2c2c]/25 p-5">
@@ -1408,7 +1884,17 @@ function ItemRow({
           )}
           {'categoryId' in item && (
             <p className="mt-1 text-sm font-light text-[#717182]">
-              カテゴリ：{categoryName ?? '未分類'}
+              カテゴリ：{groupName ? `${groupName} / ` : ''}{categoryName ?? '未分類'}
+            </p>
+          )}
+          {'groupId' in item && (
+            <p className="mt-1 text-sm font-light text-[#717182]">
+              グループ：{groupName ?? '未分類'}
+            </p>
+          )}
+          {'yearMonth' in item && (
+            <p className="mt-1 text-sm font-light text-[#717182]">
+              固定費予算：{formatCurrency(item.fixedExpenseBudget)} / 変動費予算：{formatCurrency(item.variableExpenseBudget)}
             </p>
           )}
         </div>
@@ -1528,8 +2014,10 @@ function SettingsScreen({ data }: { data: BudgetData }) {
     incomes: data.incomes,
     fixedCosts: data.fixedCosts,
     variableCosts: data.variableCosts,
+    categoryGroups: data.categoryGroups,
     categories: data.categories,
     variableCategoryBudgets: data.variableCategoryBudgets,
+    monthlyBudgets: data.monthlyBudgets,
     annualIncomes: data.annualIncomes,
     annualCosts: data.annualCosts,
     savingGoal: data.savingGoal,
@@ -1549,8 +2037,10 @@ function SettingsScreen({ data }: { data: BudgetData }) {
     data.setIncomes(backupData.incomes);
     data.setFixedCosts(backupData.fixedCosts);
     data.setVariableCosts(backupData.variableCosts);
+    data.setCategoryGroups(backupData.categoryGroups);
     data.setCategories(backupData.categories);
     data.setVariableCategoryBudgets(backupData.variableCategoryBudgets);
+    data.setMonthlyBudgets(backupData.monthlyBudgets);
     data.setAnnualIncomes(backupData.annualIncomes);
     data.setAnnualCosts(backupData.annualCosts);
     data.setSavingGoal(backupData.savingGoal);
@@ -1866,6 +2356,32 @@ function DatePicker({
   );
 }
 
+function AmountInput({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="relative">
+      <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[#717182]">
+        ¥
+      </span>
+      <input
+        type="text"
+        inputMode="numeric"
+        value={value}
+        onChange={(event) => onChange(sanitizeAmountInput(event.target.value))}
+        onFocus={() => onChange(sanitizeAmountInput(value))}
+        onBlur={() => onChange(formatAmountInput(value))}
+        className={`${inputClass} pl-9 text-right font-['Khand',sans-serif] text-lg`}
+        placeholder="0"
+      />
+    </div>
+  );
+}
+
 function FormField({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="block">
@@ -1879,8 +2395,9 @@ function nameLabel(section: Exclude<BudgetSection, 'saving'>) {
   if (section === 'income') return '収入名';
   if (section === 'fixed') return '固定費名';
   if (section === 'variableCost') return '変動費名';
+  if (section === 'categoryGroup') return 'グループカテゴリ名';
   if (section === 'category') return 'カテゴリ名';
-  if (section === 'variable') return 'カテゴリ名';
+  if (section === 'monthlyBudget') return '対象年月';
   if (section === 'annualIncome') return '年間収入名';
   return '項目名';
 }
@@ -1888,9 +2405,10 @@ function nameLabel(section: Exclude<BudgetSection, 'saving'>) {
 function namePlaceholder(section: Exclude<BudgetSection, 'saving'>) {
   if (section === 'income') return '例：給与';
   if (section === 'fixed') return '例：家賃';
-  if (section === 'variableCost') return '例：食費';
+  if (section === 'variableCost') return '例：ランチ';
+  if (section === 'categoryGroup') return '例：生活費';
   if (section === 'category') return '例：食費';
-  if (section === 'variable') return '例：食費';
+  if (section === 'monthlyBudget') return '';
   if (section === 'annualIncome') return '例：給与・賞与';
   return '例：税金';
 }
