@@ -51,10 +51,12 @@
 - [ ] TypeScript importの拡張子表記を統一するか検討する
 - [x] P0初回範囲として、月間予算の重複正規化、version 1からversion 2への移行、backup version 1・2、基本的な月次・年次集計のunit testを導入する
 - [x] P1-1として、カテゴリ予算比較、月次・年次のグループ別集計、選択グループのカテゴリ別内訳のunit testを追加する
-- [ ] P1として、削除制約、storageの全削除・一括保存、入力値整形のunit testを追加する
+- [x] P1-2として、カテゴリ・グループ削除制約の純粋関数とunit testを追加する
+- [ ] P1として、storageの全削除・一括保存、入力値整形のunit testを追加する
 - [ ] `budgetStorage.ts`を追加し、localStorageの読み書きと全削除をunit testで保護する
 - [ ] coverage、jsdom、React Testing Libraryを必要性の確認後に導入する
 - [ ] カテゴリ予算からだけ参照されているカテゴリを削除できる既知の不整合について、期待仕様を決定してから修正とテストを行う
+- [ ] `categoryId`から親グループを補完可能だが`categoryGroupId`が欠落した実績だけがある場合のグループ削除可否を、`useBudgetData`の補完Effectを含めて確認し、期待仕様を決定する。現時点ではcharacterization testで固定しない
 - [ ] `selectedGroupId === ''`で選択有無の判定が一致しない挙動を調査し、期待仕様を決定する。現時点ではcharacterization testで固定しない
 - [ ] 削除済みカテゴリを参照する複数予算が未分類実績全体をそれぞれ参照する挙動について、期待仕様とcharacterization testの要否を決定する
 - [ ] 入力フォームと削除制約のcomponent testを導入する

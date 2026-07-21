@@ -92,7 +92,7 @@ npm run test:watch
 
 typecheckは`src/main.tsx`を起点に、現行アプリから参照されるコードだけを対象とします。`vite.config.ts`と未参照コードは対象外です。
 
-unit testはNode環境で実行し、月間予算の重複正規化、version 1からversion 2への移行、backup version 1・2の解析・復元、基本的な月次・年次集計、カテゴリ予算比較、グループ・カテゴリ別変動費集計を対象とします。unit testの実行にはNode.js 20以上が必要です。この条件はVitestの実行要件であり、MonyMane全体の正式対応Node.jsバージョンではありません。
+unit testはNode環境で実行し、月間予算の重複正規化、version 1からversion 2への移行、backup version 1・2の解析・復元、基本的な月次・年次集計、カテゴリ予算比較、グループ・カテゴリ別変動費集計、カテゴリ・グループ削除制約を対象とします。unit testの実行にはNode.js 20以上が必要です。この条件はVitestの実行要件であり、MonyMane全体の正式対応Node.jsバージョンではありません。
 
 lint、format、component test、E2E test、coverageは現時点で未整備です。jsdomとReact Testing Libraryも未導入のため、UI・Hook統合テストは対象外です。
 

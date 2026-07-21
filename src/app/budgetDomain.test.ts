@@ -14,6 +14,8 @@ import {
   calculateBudgetTotals,
   calculateCategoryComparisons,
   calculateVariableCostBreakdown,
+  getCategoryDeletionBlockReason,
+  getCategoryGroupDeletionBlockReason,
   normalizeMonthlyBudgets,
   planVersion2Migration,
 } from './budgetDomain';
@@ -358,5 +360,138 @@ describe('calculateCategoryComparisons', () => {
     const snapshot = structuredClone(inputs);
     compare(variableCategoryBudgets, variableCosts);
     expect(inputs).toEqual(snapshot);
+  });
+});
+
+describe('getCategoryDeletionBlockReason', () => {
+  const cost = (id: string, categoryId?: string): VariableCost => ({
+    id,
+    name: id,
+    amount: 100,
+    month: '2026-01-01',
+    categoryId,
+    createdAt: epoch,
+    updatedAt: epoch,
+  });
+
+  it('対象IDがvariableCosts.categoryIdから参照されていればused-by-variable-costを返す', () => {
+    expect(getCategoryDeletionBlockReason({
+      categoryId: 'food',
+      variableCosts: [cost('a', 'food')],
+    })).toBe('used-by-variable-cost');
+  });
+
+  it('別カテゴリだけが使用中ならnullを返す', () => {
+    expect(getCategoryDeletionBlockReason({
+      categoryId: 'food',
+      variableCosts: [cost('a', 'travel')],
+    })).toBeNull();
+  });
+
+  it('variableCostsが空ならnullを返す', () => {
+    expect(getCategoryDeletionBlockReason({ categoryId: 'food', variableCosts: [] })).toBeNull();
+  });
+
+  it('空文字はcategoryIdの空文字と厳密一致し、欠落値とは一致しない', () => {
+    expect(getCategoryDeletionBlockReason({
+      categoryId: '',
+      variableCosts: [cost('empty', '')],
+    })).toBe('used-by-variable-cost');
+    expect(getCategoryDeletionBlockReason({
+      categoryId: '',
+      variableCosts: [cost('missing')],
+    })).toBeNull();
+  });
+
+  it('入力配列と入力オブジェクトを変更しない', () => {
+    const variableCosts = [cost('a', 'food')];
+    const snapshot = structuredClone(variableCosts);
+    getCategoryDeletionBlockReason({ categoryId: 'food', variableCosts });
+    expect(variableCosts).toEqual(snapshot);
+  });
+});
+
+describe('getCategoryGroupDeletionBlockReason', () => {
+  const category = (id: string, groupId: string): Category => ({
+    id,
+    groupId,
+    name: id,
+    createdAt: epoch,
+    updatedAt: epoch,
+  });
+  const cost = (id: string, categoryGroupId?: string): VariableCost => ({
+    id,
+    name: id,
+    amount: 100,
+    month: '2026-01-01',
+    categoryGroupId,
+    createdAt: epoch,
+    updatedAt: epoch,
+  });
+
+  it('子カテゴリがあればhas-child-categoryを返す', () => {
+    expect(getCategoryGroupDeletionBlockReason({
+      groupId: 'living',
+      categories: [category('food', 'living')],
+      variableCosts: [],
+    })).toBe('has-child-category');
+  });
+
+  it('子カテゴリがなく直接参照実績があればused-by-variable-costを返す', () => {
+    expect(getCategoryGroupDeletionBlockReason({
+      groupId: 'living',
+      categories: [],
+      variableCosts: [cost('a', 'living')],
+    })).toBe('used-by-variable-cost');
+  });
+
+  it('子カテゴリも直接参照実績もなければnullを返す', () => {
+    expect(getCategoryGroupDeletionBlockReason({
+      groupId: 'living',
+      categories: [],
+      variableCosts: [],
+    })).toBeNull();
+  });
+
+  it('子カテゴリと直接参照実績が両方あればhas-child-categoryを優先する', () => {
+    expect(getCategoryGroupDeletionBlockReason({
+      groupId: 'living',
+      categories: [category('food', 'living')],
+      variableCosts: [cost('a', 'living')],
+    })).toBe('has-child-category');
+  });
+
+  it('空文字は空のgroupIdとcategoryGroupIdに厳密一致し、欠落値とは一致しない', () => {
+    expect(getCategoryGroupDeletionBlockReason({
+      groupId: '',
+      categories: [category('empty', '')],
+      variableCosts: [],
+    })).toBe('has-child-category');
+    expect(getCategoryGroupDeletionBlockReason({
+      groupId: '',
+      categories: [],
+      variableCosts: [cost('empty', '')],
+    })).toBe('used-by-variable-cost');
+    expect(getCategoryGroupDeletionBlockReason({
+      groupId: '',
+      categories: [],
+      variableCosts: [cost('missing')],
+    })).toBeNull();
+  });
+
+  it('一致する参照がないIDならnullを返す', () => {
+    expect(getCategoryGroupDeletionBlockReason({
+      groupId: 'missing',
+      categories: [category('food', 'living')],
+      variableCosts: [cost('a', 'living')],
+    })).toBeNull();
+  });
+
+  it('categoriesとvariableCostsを変更しない', () => {
+    const categories = [category('food', 'living')];
+    const variableCosts = [cost('a', 'living')];
+    const snapshot = structuredClone({ categories, variableCosts });
+    getCategoryGroupDeletionBlockReason({ groupId: 'living', categories, variableCosts });
+    expect({ categories, variableCosts }).toEqual(snapshot);
   });
 });

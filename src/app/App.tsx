@@ -41,7 +41,12 @@ import type {
   VariableCost,
 } from './types';
 import { parseBackupJson } from './backup';
-import { calculateVariableCostBreakdown, normalizeMonthlyBudgets } from './budgetDomain';
+import {
+  calculateVariableCostBreakdown,
+  getCategoryDeletionBlockReason,
+  getCategoryGroupDeletionBlockReason,
+  normalizeMonthlyBudgets,
+} from './budgetDomain';
 import {
   createId,
   STORAGE_KEYS,
@@ -1279,12 +1284,15 @@ function ItemManager({
       data.setVariableCosts((current) => current.filter((x) => x.id !== item.id));
     }
     if (section === 'categoryGroup' && 'id' in item) {
-      const childCategories = data.categories.some((category) => category.groupId === item.id);
-      const usedByCost = data.variableCosts.some((cost) => cost.categoryGroupId === item.id);
-      if (childCategories || usedByCost) {
+      const blockReason = getCategoryGroupDeletionBlockReason({
+        groupId: item.id,
+        categories: data.categories,
+        variableCosts: data.variableCosts,
+      });
+      if (blockReason) {
         setMessage({
           type: 'error',
-          text: childCategories
+          text: blockReason === 'has-child-category'
             ? '配下カテゴリがあるグループカテゴリは削除できません。'
             : '実績データから参照されているグループカテゴリは削除できません。',
         });
@@ -1293,8 +1301,11 @@ function ItemManager({
       data.setCategoryGroups((current) => current.filter((x) => x.id !== item.id));
     }
     if (section === 'category' && 'id' in item) {
-      const usedByCost = data.variableCosts.some((cost) => cost.categoryId === item.id);
-      if (usedByCost) {
+      const blockReason = getCategoryDeletionBlockReason({
+        categoryId: item.id,
+        variableCosts: data.variableCosts,
+      });
+      if (blockReason === 'used-by-variable-cost') {
         setMessage({ type: 'error', text: '使用中のカテゴリは削除できません。' });
         return;
       }

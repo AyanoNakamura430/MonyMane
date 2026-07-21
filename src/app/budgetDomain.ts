@@ -13,6 +13,42 @@ import type {
   VariableCostBreakdown,
 } from './types';
 
+export type CategoryDeletionBlockReason = 'used-by-variable-cost' | null;
+
+export type CategoryGroupDeletionBlockReason =
+  | 'has-child-category'
+  | 'used-by-variable-cost'
+  | null;
+
+export function getCategoryDeletionBlockReason({
+  categoryId,
+  variableCosts,
+}: {
+  categoryId: string;
+  variableCosts: VariableCost[];
+}): CategoryDeletionBlockReason {
+  return variableCosts.some((cost) => cost.categoryId === categoryId)
+    ? 'used-by-variable-cost'
+    : null;
+}
+
+export function getCategoryGroupDeletionBlockReason({
+  groupId,
+  categories,
+  variableCosts,
+}: {
+  groupId: string;
+  categories: Category[];
+  variableCosts: VariableCost[];
+}): CategoryGroupDeletionBlockReason {
+  if (categories.some((category) => category.groupId === groupId)) {
+    return 'has-child-category';
+  }
+  return variableCosts.some((cost) => cost.categoryGroupId === groupId)
+    ? 'used-by-variable-cost'
+    : null;
+}
+
 export function normalizeMonthlyBudgets(items: MonthlyBudget[]): MonthlyBudget[] {
   if (!Array.isArray(items)) return [];
 
